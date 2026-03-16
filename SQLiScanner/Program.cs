@@ -1,4 +1,5 @@
-﻿using SQLiScanner.Utility;
+﻿using SQLiScanner.Modules;
+using SQLiScanner.Utility;
 using System;
 using System.Net.Http;
 using System.Text;
@@ -63,7 +64,7 @@ namespace SQLiScanner
             //Bước 1: Crawl khắp response Html để tìm URL tiềm năng
             Crawler crawler = new Crawler(client);
             List<CrawlResult> targets = await crawler.CrawlAsync(url, maxDepth);
-            if(targets.Count == 0)
+            if (targets.Count == 0)
             {
                 Console.ForegroundColor = ConsoleColor.Red;
                 Console.WriteLine("[-] Không tìm thấy URL tiềm năng để khai thác.");
@@ -81,7 +82,7 @@ namespace SQLiScanner
                 if (result.IsVulnerable)
                 {
                     int colCount = await unionDetector.GetColumnCountAsync(target, result);
-                    if(colCount > 0)
+                    if (colCount > 0)
                     {
                         List<int> visibleCols = await unionDetector.GetVisibleColumnsAsync(target, result, colCount);
                         if (visibleCols.Count > 0)
@@ -113,7 +114,7 @@ namespace SQLiScanner
             Console.ForegroundColor = ConsoleColor.Cyan;
             Console.WriteLine($"[+] Nội dung response: ");
             Console.ResetColor();
-                
+
             if (statusCode == 200) Console.ForegroundColor = ConsoleColor.Green;
             else Console.ForegroundColor = ConsoleColor.Red;
 
@@ -155,11 +156,16 @@ namespace SQLiScanner
     public class DetectionResult
     {
         public DbType DatabaseType { get; set; } = DbType.Unknow;
-        public string VulnerableParam { get; set; } 
+        public string VulnerableParam { get; set; }
         public string WorkingPrefix { get; set; }
+        public string WorkingSuffix { get; set; }
         public string ErrorMessage { get; set; }
 
         public bool IsVulnerable => DatabaseType != DbType.Unknow;
+        public override string ToString()
+        {
+            return $"[{DatabaseType}] Param:{VulnerableParam} Prefix:'{WorkingPrefix}' Suffix:'{WorkingSuffix}'";
+        }
     }
 
     public enum DbType

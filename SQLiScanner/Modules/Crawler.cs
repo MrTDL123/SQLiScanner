@@ -9,7 +9,7 @@ using System.Text.RegularExpressions;
 using System.Threading.Tasks;
 using System.Web;
 
-namespace SQLiScanner
+namespace SQLiScanner.Modules
 {
     public class CrawlResult
     {

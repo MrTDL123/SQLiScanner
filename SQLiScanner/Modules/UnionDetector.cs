@@ -5,7 +5,7 @@ using System.Linq;
 using System.Net.Http; // Cần thêm cái này
 using System.Threading.Tasks;
 
-namespace SQLiScanner
+namespace SQLiScanner.Modules
 {
     public class UnionDetector
     {
@@ -42,7 +42,7 @@ namespace SQLiScanner
 
                 int currentLength = await GetResponseLengthAsync(target, detectedData.VulnerableParam, payload);
 
-                bool isError = Math.Abs(currentLength - baseLength) > (baseLength * 0.2);
+                bool isError = Math.Abs(currentLength - baseLength) > baseLength * 0.2;
 
                 if (isError)
                 {
@@ -79,7 +79,7 @@ namespace SQLiScanner
             Console.WriteLine("\n[+] Bắt đầu tìm cột hiển thị (UNION SELECT)");
 
             List<int> visibleCols = new List<int>();
-            string fromTable = (detectedData.DatabaseType == DbType.Oracle) ? " FROM DUAL" : "";
+            string fromTable = detectedData.DatabaseType == DbType.Oracle ? " FROM DUAL" : "";
             string comment = GetCommentSymbol(detectedData.DatabaseType);
             string originalValue = target.Params[detectedData.VulnerableParam];
 
