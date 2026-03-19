@@ -24,7 +24,7 @@ namespace SQLiScanner.Utility
 
         public static void Process(string message)
         {
-            _indentLevel+= 3;
+            _indentLevel += 3;
             Console.ForegroundColor = ConsoleColor.DarkCyan;
             Console.WriteLine(GetIndent() + message);
             Console.ResetColor();
@@ -126,6 +126,61 @@ namespace SQLiScanner.Utility
             Console.ResetColor();
         }
 
+        public static void SummaryResults(List<DetectionResult> results)
+        {
+            Console.WriteLine("\n");
+            Console.ForegroundColor = ConsoleColor.Magenta;
+            Console.WriteLine(new string('=', 70));
+            Console.WriteLine("                 TỔNG KẾT KẾT QUẢ QUÉT SQL INJECTION");
+            Console.WriteLine(new string('=', 70));
+
+            // Lọc ra danh sách các kết quả có lỗ hổng
+            var vulnerableResults = results.Where(r => r.IsVulnerable).ToList();
+
+            if (vulnerableResults.Count > 0)
+            {
+                Console.ForegroundColor = ConsoleColor.Red;
+                Console.WriteLine($" [!] NGUY HIỂM: PHÁT HIỆN {vulnerableResults.Count} ĐIỂM CÓ THỂ BỊ KHAI THÁC!\n");
+
+                for (int i = 0; i < vulnerableResults.Count; i++)
+                {
+                    var result = vulnerableResults[i];
+
+                    Console.ForegroundColor = ConsoleColor.Yellow;
+                    Console.WriteLine($" --- [ LỖ HỔNG #{i + 1} ] ---");
+
+                    Console.ForegroundColor = ConsoleColor.White;
+                    Console.WriteLine($"  - URL Vulnerable : {result.VulnerableURL}");
+                    Console.WriteLine($"  - Parameter      : {result.VulnerableParam}");
+                    Console.WriteLine($"  - Database Type  : {result.DatabaseType}");
+                    Console.WriteLine($"  - Context Name   : {result.FoundContext}");
+
+                    Console.ForegroundColor = ConsoleColor.Cyan;
+                    Console.WriteLine($"  - Working Prefix : [{result.WorkingPrefix}]");
+                    Console.WriteLine($"  - Working Suffix : [{result.WorkingSuffix}]");
+
+                    Console.ForegroundColor = result.IsExpointable ? ConsoleColor.Red : ConsoleColor.DarkGray;
+                    Console.WriteLine($"  - Exploitable    : {(result.IsExpointable ? "YES (Có thể khai thác sâu)" : "NO (Chỉ phát hiện)")}");
+
+                    if (!string.IsNullOrEmpty(result.ErrorMessage))
+                    {
+                        Console.ForegroundColor = ConsoleColor.DarkYellow;
+                        Console.WriteLine($"  - Error Message  : {result.ErrorMessage}");
+                    }
+                    Console.WriteLine(); // Dòng trống ngăn cách các lỗ hổng
+                }
+            }
+            else
+            {
+                Console.ForegroundColor = ConsoleColor.Green;
+                Console.WriteLine(" [✓] TRẠNG THÁI CUỐI CÙNG: AN TOÀN");
+                Console.WriteLine($"     Đã quét qua {results.Count} mục tiêu nhưng không phát hiện lỗ hổng SQLi nào.");
+            }
+
+            Console.ForegroundColor = ConsoleColor.Magenta;
+            Console.WriteLine(new string('=', 70));
+            Console.ResetColor();
+        }
         private static string GetIndent() => new string(' ', _indentLevel * INDENT_SIZE);
     }
 }

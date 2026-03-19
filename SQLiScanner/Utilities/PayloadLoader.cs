@@ -120,12 +120,12 @@ namespace SQLiScanner.Utilities
                                 Vector = element.Element("vector")?.Value ?? "",
                                 Comment = element.Element("request")?.Element("comment")?.Value,
                                 ComparisonPayload = element.Element("response")?.Element("comparison")?.Value,
-                                ErrorResponsePattern = element.Element("response")?.Element("grep")?.Value,
-                                DBMS = element.Element("details")?.Element("dbms")?.Value ?? "Unknown",
+                                ErrorResponsePattern = element.Element("grep")?.Value,
+                                DBMS = element.Element("dbms")?.Value ?? "Unknown",
                                 DBMSVersion = element.Element("details")?.Element("dbms_version")?.Value ?? ""
                             };
 
-                            var payloadElements = element.Element("request")?.Elements("payload");
+                            var payloadElements = element.Elements("payload");
                             if (payloadElements != null)
                             {
                                 foreach (var payloadElem in payloadElements)
@@ -158,7 +158,7 @@ namespace SQLiScanner.Utilities
                 }
 
                 _cachedPayloads[stype] = payloads;
-                Logger.Success($"Đã load thành công {payloads.Count} (stype={stype}))");
+                Logger.Success($"Đã load thành công {payloads.Count} payloads (stype={stype}))");
                 return payloads;
             }
             catch (Exception ex)

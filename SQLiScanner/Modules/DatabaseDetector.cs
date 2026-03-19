@@ -33,7 +33,7 @@ namespace SQLiScanner.Modules
             {
                 string paramName = param.Key;
                 string originalValue = param.Value;
-                Logger.Info($"ĐỐI TƯỢNG THAM SỐ ĐỂ CHÈN PAYLOAD: {paramName}");
+                Logger.Info($"THAM SỐ ĐƯỢC SỬ DỤNG ĐỂ TẤN CÔNG: {paramName}");
                 HeuristicResult heuristicResult = await contextAnalyzer.PerformHeuristicScanAsync(target, paramName);
                 if (!heuristicResult.IsReadyForDetection) // Đảm bảo đã đầy đủ Boudary và Payload để test
                 {
@@ -45,7 +45,7 @@ namespace SQLiScanner.Modules
                 {
                     string prefix = boundary.Prefix;
                     string suffix = boundary.Suffix;
-                    Logger.Success($"Đã nhận Boundary chuẩn từ ContextAnalyzer: Prefix [{prefix}] | Suffix [{suffix}]");
+                    Logger.Info($"\nXét Boundary: Prefix [{prefix}] | Suffix [{suffix}]");
 
                     var errorPayloads = heuristicResult.ApplicablePayloads.Where(p => p.SType == 2).ToList();
                     if (errorPayloads.Any()) // Error-Based
@@ -62,6 +62,8 @@ namespace SQLiScanner.Modules
                             {
                                 DetectionResult result = new DetectionResult
                                 {
+                                    VulnerableURL = target.FullUrl,
+                                    FoundContext = "ERROR-BASED",
                                     DatabaseType = dbType,
                                     VulnerableParam = paramName,
                                     WorkingPrefix = prefix,
@@ -94,6 +96,8 @@ namespace SQLiScanner.Modules
                             {
                                 DetectionResult result = new DetectionResult
                                 {
+                                    VulnerableURL = target.FullUrl,
+                                    FoundContext = "BOOLEAN-BASED",
                                     DatabaseType = dbType,
                                     VulnerableParam = paramName,
                                     WorkingPrefix = prefix,
@@ -106,6 +110,7 @@ namespace SQLiScanner.Modules
                             }
                         }
 
+                        Logger.Warning("Không thể sử dụng Boolean-Based để xác định Database!");
                     }
 
                     // --- GIAI ĐOẠN 3: TÌM KIẾM TIME-BASED (SType == 5) ---
@@ -122,6 +127,8 @@ namespace SQLiScanner.Modules
                             {
                                 DetectionResult result = new DetectionResult
                                 {
+                                    VulnerableURL = target.FullUrl,
+                                    FoundContext = "TIME-BASED",
                                     DatabaseType = dbType,
                                     VulnerableParam = paramName,
                                     WorkingPrefix = prefix,
@@ -132,6 +139,7 @@ namespace SQLiScanner.Modules
                                 return result; // Tìm thấy thì thoát luôn
                             }
                         }
+                        Logger.Warning("Không thể sử dụng Time-Based để xác định Database!");
                     }
                 }
             }
@@ -227,7 +235,7 @@ namespace SQLiScanner.Modules
             Logger.Info($"Kiểm tra Error-based với payload dành cho {payloads.DBMS}");
             foreach (string payload in payloads.Payloads)
             {
-                string injectedPayload = $"{originalValue}{prefix}{payload} {suffix} ";
+                string injectedPayload = $"{originalValue}{prefix} {payload} {suffix} ";
                 var (html, _, _) = await SendRequestAsync(target, paramName, injectedPayload);
 
                 if (string.IsNullOrEmpty(html))
@@ -235,15 +243,23 @@ namespace SQLiScanner.Modules
 
                 if (!string.IsNullOrEmpty(payloads.ErrorResponsePattern))
                 {
-                    var regex = new Regex(payloads.ErrorResponsePattern, RegexOptions.IgnoreCase);
-                    if (regex.IsMatch(html))
+                    try
                     {
-                        Logger.Success($"✓ Error-based detected: {payloads.DBMS}");
-                        return GetDbTypeFromString(payloads.DBMS);
+                        Match match = Regex.Match(html, payloads.ErrorResponsePattern, RegexOptions.IgnoreCase | RegexOptions.Singleline);
+                        if (match.Success)
+                        {
+                            string extractedData = match.Groups["result"].Value;
+                            Logger.Success($"[+] Error-Based thành công! Đã trích xuất được: {extractedData}");
+
+                            return GetDbTypeFromString(payloads.DBMS);
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        Logger.Warning($"Lỗi phân tích Regex Error-Based: {ex.Message}");
                     }
                 }
             }
-
             return DbType.Unknow;
         }
 
@@ -260,10 +276,10 @@ namespace SQLiScanner.Modules
             foreach (var payload in payloads.Payloads)
             {
                 // CHUẨN BỊ PAYLOAD
-                string fullPayloadTrue = $"{originalValue}{prefix} AND {payload} {suffix} ";
+                string fullPayloadTrue = $"{originalValue}{prefix} {payload} {suffix} ";
 
                 string falsePayload = payload.Replace("=", "!=").Replace(">", "<");
-                string fullPayloadFalse = $"{originalValue}{prefix} AND {falsePayload} {suffix} ";
+                string fullPayloadFalse = $"{originalValue}{prefix} {falsePayload} {suffix} ";
 
                 Logger.Process($"[>] TRUE PayLoad {fullPayloadTrue}");
                 (string? htmlTrue, byte[]? bytesTrue, int statusTrue) = await SendRequestAsync(target, paramName, fullPayloadTrue);
@@ -345,22 +361,26 @@ namespace SQLiScanner.Modules
 
             foreach (var payload in payloads.Payloads)
             {
+                Logger.Info($"\nSử dụng Payload: {payload}");
                 string payloadStr = payload.Replace("[SLEEPTIME]", sleepSeconds.ToString());
                 string fullPayload = $"{originalValue}{prefix} AND {payloadStr} {suffix} ";
-                Logger.Process($"[TIME-BASED] Đang đo Baseline Ping cho tham số '{paramName}'...");
+                Logger.Process($"[TIME-BASED] Kiểm tra thời gian phản hồi trung bình từ đối tượng...");
 
                 // 1. LẤY BASELINE (3 MẪU ĐỂ LẤY TRUNG BÌNH & MAX)
                 List<long> baselineDelays = new List<long>();
                 for (int i = 0; i < 3; i++)
                 {
-                    var (success, ms, _) = await SendRequestWithTimingAsync(target, paramName, originalValue);
+                    Logger.Process($"Kiểm tra lần {i}");
+                    var (success, ms, status) = await SendRequestWithTimingAsync(target, paramName, originalValue);
+                    Logger.Response(status,null, $"Thời gian phản hồi: {ms}ms");
                     if (success) baselineDelays.Add(ms);
                 }
 
                 if (baselineDelays.Count == 0) return DbType.Unknow; // Mất mạng
                 long maxBaseline = baselineDelays.Max();
+                Logger.Info($"Thời gian phản hồi chậm nhất trong 3 lần đo: {maxBaseline}ms");
                 long avgBaseline = (long)baselineDelays.Average();
-
+                Logger.Info($"Thời gian phản hồi trung bình trong 3 lần đo: {avgBaseline}ms");
                 // Nếu mạng quá lag (Baseline bình thường mà mất tới > 3-4 giây), thì không thể test Time-based (rất dễ False Positive)
                 if (avgBaseline > 4000)
                 {
@@ -370,22 +390,29 @@ namespace SQLiScanner.Modules
 
                 // TÍNH TOÁN NGƯỠNG (THRESHOLD): Thời gian delay tối đa của mạng + Thời gian Sleep (trừ hao 500ms sai số)
                 long thresholdMs = maxBaseline + sleepMilliseconds - 500;
+                Logger.Info($"Nếu thời gian request trả về lớn hơn {thresholdMs}ms ta mới nghi ngờ là có lỗi SQLi");
 
                 Logger.Process($"[TIME-BASED] Baseline TB: {avgBaseline}ms | Ngưỡng xác nhận (Threshold): >= {thresholdMs}ms");
 
                 // 2. GỬI PAYLOAD TRUE (CÓ LỆNH SLEEP)
-                Logger.Process($"[>] Gửi Payload Sleep: {fullPayload}");
+                Logger.Process($"Gửi Payload chứa hàm SLEEP: [{fullPayload}]");
                 var sleepResponse = await SendRequestWithTimingAsync(target, paramName, fullPayload);
-
+                Logger.Response(sleepResponse.statusCode ,null, $"Thời gian phản hồi: {sleepResponse.elapsedMs}");
                 if (sleepResponse.elapsedMs >= thresholdMs || (!sleepResponse.isSuccess && sleepResponse.elapsedMs >= sleepMilliseconds))
                 {
-                    Logger.Warning($"[!] Phát hiện độ trễ bất thường: {sleepResponse.elapsedMs}ms. Đang Double-Check...");
+                    Logger.Success($"[!] Phát hiện độ trễ bất thường: {sleepResponse.elapsedMs}ms. Đang Double-Check...");
                     // Gửi lại Baseline gốc một lần nữa. Nếu nó trả về NHANH, chứng tỏ lệnh Sleep vừa nãy là thật chứ không phải do Server Lag.
+
+                    Logger.Process("Kiểm tra lại thời gian phản hồi khi không có payload");
                     var doubleCheck = await SendRequestWithTimingAsync(target, paramName, originalValue);
+                    Logger.Response(doubleCheck.statusCode ,null, $"Thời gian phản hồi: {doubleCheck.elapsedMs}");
 
                     if (doubleCheck.isSuccess && doubleCheck.elapsedMs <= maxBaseline + 1000) // Cho phép xê dịch 1s
                     {
+
+                        Logger.Success($"Hàm SLEEP có tác dụng với thời gian phản hồi Payload độc ({sleepResponse.elapsedMs}) > {thresholdMs}");
                         DbType dbType = GetDbTypeFromString(payloads.DBMS);
+                        Logger.Success($"Server sử dụng {payloads.DBMS} làm cơ sở dữ liệu!");
                         return dbType;
                     }
                     else
@@ -393,6 +420,8 @@ namespace SQLiScanner.Modules
                         Logger.Warning("Double-Check thất bại (Server đang bị Lag thực sự). Hủy báo động giả.");
                     }
                 }
+
+                Logger.Warning($"Payload [{payload}] chứa hàm SLEEP không hoạt động");
             }
             return DbType.Unknow;
         }

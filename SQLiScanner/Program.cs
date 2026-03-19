@@ -1,4 +1,5 @@
-﻿using SQLiScanner.Modules;
+﻿using SQLiScanner.Models;
+using SQLiScanner.Modules;
 using SQLiScanner.Utility;
 using System;
 using System.Net.Http;
@@ -72,11 +73,35 @@ namespace SQLiScanner
                 return;
             }
 
+            // CrawlResult target = new()
+            // {
+            //     FullUrl = "http://testasp.vulnweb.com/Login.asp?RetURL=%2FDefault%2Easp%3F",
+            //     HttpMethod = "POST",
+            //     IsForm = true,
+            //     Params = new()
+            //     {
+            //         { "tfUName", "admin" },
+            //         { "tfUPass", "Admin@123"}
+            //     }
+            // };
+
+            // CrawlResult target = new()
+            // {
+            //     FullUrl = "http://testasp.vulnweb.com/showforum.asp?id=0",
+            //     HttpMethod = "GET",
+            //     IsForm = false,
+            //     Params = new()
+            //     {
+            //         { "id", "0" }
+            //     }
+            // };
+
             DatabaseDetector dbDetector = new DatabaseDetector(client);
             UnionDetector unionDetector = new UnionDetector(client);
+            List<DetectionResult> results = new();
             foreach (CrawlResult target in targets)
             {
-                //Bước 2: Xác định hệ quản trị CSDL cùng với Prefix phù hợp.
+                // Bước 2: Xác định hệ quản trị CSDL cùng với Prefix phù hợp.
                 DetectionResult result = await dbDetector.DetectAsync(target);
 
                 if (result.IsVulnerable)
@@ -87,6 +112,8 @@ namespace SQLiScanner
                         List<int> visibleCols = await unionDetector.GetVisibleColumnsAsync(target, result, colCount);
                         if (visibleCols.Count > 0)
                         {
+                            result.IsExpointable = true;
+                            results.Add(result);
                             Console.ForegroundColor = ConsoleColor.Green;
                             Console.WriteLine("\n[***] EXPLOIT THÀNH CÔNG! BẠN CÓ THỂ KHAI THÁC DỮ LIỆU.");
                             Console.ResetColor();
@@ -104,7 +131,10 @@ namespace SQLiScanner
 
             }
 
-
+            if (results.Count > 0)
+            {
+                Logger.SummaryResults(results);
+            }
         }
 
         static async Task PrintResponseInfoAsync(HttpResponseMessage response)
@@ -155,6 +185,9 @@ namespace SQLiScanner
     #region Data Class
     public class DetectionResult
     {
+        public bool IsExpointable { get; set; } = false;
+        public string VulnerableURL { get; set; }
+        public string FoundContext { get; set; }
         public DbType DatabaseType { get; set; } = DbType.Unknow;
         public string VulnerableParam { get; set; }
         public string WorkingPrefix { get; set; }

@@ -59,9 +59,6 @@ namespace SQLiScanner.Models
 
         public List<PayloadTest> ApplicablePayloads { get; set; } = new();
 
-        // Chứa toàn bộ quá trình phân tích ngữ cảnh
-        public string DebugInfo { get; set; }
-
         // Giá trị:
         //   - "SUCCESS" = Đã lock boundary & load payloads
         //   - "UNCERTAIN" = Không chắc chắn, cần thử all boundaries
@@ -72,7 +69,7 @@ namespace SQLiScanner.Models
         // Đã có boundary được xác nhạn
         public bool HasLockedBoundary => LockedBoundary != null;
         public bool HasPayloads => ApplicablePayloads?.Count > 0;
-        public bool HasBoundaries => ApplicableBoundaries?.Count > 0;
+        public bool HasBoundaries => ApplicableBoundaries?.Count > 0 || HasLockedBoundary;
         public bool IsReadyForDetection => HasPayloads && HasBoundaries;
 
         public string GetLockedBoundaryInfo()
@@ -80,8 +77,7 @@ namespace SQLiScanner.Models
             if (!HasLockedBoundary) return "Not locked";
             return $"Ngữ cảnh: {LockedBoundary.ContextName} | " +
                    $"Prefix: '{LockedBoundary.Prefix}' | " +
-                   $"Suffix: '{LockedBoundary.Suffix}'" +
-                   $"Comment: '{LockedBoundary.Comment}'";
+                   $"Suffix: '{LockedBoundary.Suffix}'";
         }
     }
 }

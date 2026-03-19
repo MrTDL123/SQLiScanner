@@ -1,4 +1,5 @@
 ﻿using HtmlAgilityPack;
+using SQLiScanner.Models;
 using SQLiScanner.Utility;
 using System;
 using System.Collections.Generic;
@@ -11,21 +12,6 @@ using System.Web;
 
 namespace SQLiScanner.Modules
 {
-    public class CrawlResult
-    {
-        
-        public string FullUrl { get; set; }
-        public string HttpMethod { get; set; }
-        public bool IsForm { get; set; }
-        public Dictionary<string, string> Params { get; set; }
-
-        public CrawlResult() 
-        {
-            Params = new Dictionary<string, string>();
-            
-        }
-    }
-
     public class Crawler
     {
         private readonly HttpClient _client;
@@ -41,7 +27,6 @@ namespace SQLiScanner.Modules
         {
             _scannedSignatures.Clear();
             _visitedUrls.Clear();
-
             List<CrawlResult> results = new List<CrawlResult>();
 
             // Queue lưu trữ URL và độ sâu hiện tại của nó
