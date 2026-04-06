@@ -73,6 +73,32 @@ namespace SQLiScanner
                 return;
             }
 
+            List<CrawlResult> targetsDemo = new()
+            {
+                new()
+                {
+                    FullUrl = "http://testasp.vulnweb.com/Login.asp?RetURL=%2FDefault%2Easp%3F",
+                    HttpMethod = "POST",
+                    IsForm = true,
+                    Params = new()
+                    {
+                        { "tfUName", "admin" },
+                        { "tfUPass", "Admin@123"}
+                    }
+                },
+
+                new()
+                {
+                    FullUrl = "http://testasp.vulnweb.com/showforum.asp?id=0",
+                    HttpMethod = "GET",
+                    IsForm = false,
+                    Params = new()
+                    {
+                        { "id", "0" }
+                    }
+                }
+
+            };
             // CrawlResult target = new()
             // {
             //     FullUrl = "http://testasp.vulnweb.com/Login.asp?RetURL=%2FDefault%2Easp%3F",
@@ -95,11 +121,11 @@ namespace SQLiScanner
             //         { "id", "0" }
             //     }
             // };
-
-            DatabaseDetector dbDetector = new DatabaseDetector(client);
+            ContextAnalyzer contextAnalyzer = new ContextAnalyzer(client);
+            DatabaseDetector dbDetector = new DatabaseDetector(client, contextAnalyzer);
             UnionDetector unionDetector = new UnionDetector(client);
             List<DetectionResult> results = new();
-            foreach (CrawlResult target in targets)
+            foreach (CrawlResult target in targetsDemo)
             {
                 // Bước 2: Xác định hệ quản trị CSDL cùng với Prefix phù hợp.
                 DetectionResult result = await dbDetector.DetectAsync(target);

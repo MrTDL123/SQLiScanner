@@ -14,9 +14,11 @@ namespace SQLiScanner.Modules
     public class DatabaseDetector
     {
         private readonly HttpClient _client;
-        public DatabaseDetector(HttpClient client)
+        private readonly ContextAnalyzer _contextAnalyzer;
+        public DatabaseDetector(HttpClient client, ContextAnalyzer contextAnalyzer)
         {
             _client = client;
+            _contextAnalyzer = contextAnalyzer;
         }
 
         public async Task<DetectionResult> DetectAsync(CrawlResult target)
@@ -26,15 +28,14 @@ namespace SQLiScanner.Modules
                 target.HttpMethod,
                 string.Join(", ", target.Params.Keys)
             );
-            // Kiểm tra ngữ cảnh
-            var contextAnalyzer = new ContextAnalyzer(_client);
-
+            
             foreach (var param in target.Params)
             {
                 string paramName = param.Key;
                 string originalValue = param.Value;
                 Logger.Info($"THAM SỐ ĐƯỢC SỬ DỤNG ĐỂ TẤN CÔNG: {paramName}");
-                HeuristicResult heuristicResult = await contextAnalyzer.PerformHeuristicScanAsync(target, paramName);
+                // Kiểm tra ngữ cảnh
+                HeuristicResult heuristicResult = await _contextAnalyzer.PerformHeuristicScanAsync(target, paramName);
                 if (!heuristicResult.IsReadyForDetection) // Đảm bảo đã đầy đủ Boudary và Payload để test
                 {
                     Logger.Warning($"Bỏ qua tham số [{paramName}] vì không khóa được Boundary hợp lệ.");
