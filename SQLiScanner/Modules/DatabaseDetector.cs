@@ -1,4 +1,5 @@
 ﻿using SQLiScanner.Models;
+using SQLiScanner.Models.Enums;
 using SQLiScanner.Utility;
 using System;
 using System.Collections.Generic;
@@ -9,16 +10,33 @@ using System.Text;
 using System.Text.RegularExpressions;
 using System.Threading.Tasks;
 using System.Diagnostics;
+using AngleSharp;
+using AngleSharp.Dom;
+using AngleSharp.Html.Parser;
+using AngleSharp.Text;
+using SQLiScanner.DTOs;
+using System.Diagnostics.CodeAnalysis;
+using SQLiScanner.Services;
+
 namespace SQLiScanner.Modules
 {
+    public enum SimilarityResult
+    {
+        Similar,   // Giống nhau (> 95%) 
+        Different, // Khác biệt rõ ràng (< 80%)
+        GreyZone   // Vùng xám (80% - 95%) -> Cần AI thẩm định
+    }
+
     public class DatabaseDetector
     {
         private readonly HttpClient _client;
+        private readonly IAiApiClient _aiApiClient;
         private readonly ContextAnalyzer _contextAnalyzer;
-        public DatabaseDetector(HttpClient client, ContextAnalyzer contextAnalyzer)
+        public DatabaseDetector(HttpClient client, ContextAnalyzer contextAnalyzer, IAiApiClient aiApiClient)
         {
             _client = client;
             _contextAnalyzer = contextAnalyzer;
+            _aiApiClient = aiApiClient;
         }
 
         public async Task<DetectionResult> DetectAsync(CrawlResult target)
@@ -28,7 +46,7 @@ namespace SQLiScanner.Modules
                 target.HttpMethod,
                 string.Join(", ", target.Params.Keys)
             );
-            
+
             foreach (var param in target.Params)
             {
                 string paramName = param.Key;
@@ -59,7 +77,7 @@ namespace SQLiScanner.Modules
                                 prefix, suffix, payload
                             );
 
-                            if (dbType != DbType.Unknow)
+                            if (dbType != DatabaseType.Unknow)
                             {
                                 DetectionResult result = new DetectionResult
                                 {
@@ -93,7 +111,7 @@ namespace SQLiScanner.Modules
                                     target, paramName, originalValue,
                                     prefix, suffix, payload);
 
-                            if (dbType != DbType.Unknow)
+                            if (dbType != DatabaseType.Unknow)
                             {
                                 DetectionResult result = new DetectionResult
                                 {
@@ -124,7 +142,7 @@ namespace SQLiScanner.Modules
                             var dbType = await TestTimeBasedPayloadAsync(
                                 target, paramName, originalValue,
                                 prefix, suffix, payload);
-                            if (dbType != DbType.Unknow)
+                            if (dbType != DatabaseType.Unknow)
                             {
                                 DetectionResult result = new DetectionResult
                                 {
@@ -146,7 +164,7 @@ namespace SQLiScanner.Modules
             }
 
             Logger.Skipped("Không tìm thấy được lỗ hổng SQLi trong tất cả các Entry points!");
-            return new DetectionResult { DatabaseType = DbType.Unknow };
+            return new DetectionResult { DatabaseType = DatabaseType.Unknow };
         }
 
         #region Các hàm phụ trợ
@@ -224,7 +242,7 @@ namespace SQLiScanner.Modules
             }
         }
 
-        private async Task<DbType> TestErrorBasedPayload(
+        private async Task<DatabaseType> TestErrorBasedPayload(
             CrawlResult target,
             string paramName,
             string originalValue,
@@ -240,7 +258,7 @@ namespace SQLiScanner.Modules
                 var (html, _, _) = await SendRequestAsync(target, paramName, injectedPayload);
 
                 if (string.IsNullOrEmpty(html))
-                    return DbType.Unknow;
+                    return DatabaseType.Unknow;
 
                 if (!string.IsNullOrEmpty(payloads.ErrorResponsePattern))
                 {
@@ -261,10 +279,10 @@ namespace SQLiScanner.Modules
                     }
                 }
             }
-            return DbType.Unknow;
+            return DatabaseType.Unknow;
         }
 
-        private async Task<DbType> TestBooleanBasedPayload(
+        private async Task<DatabaseType> TestBooleanBasedPayload(
             CrawlResult target,
             string paramName,
             string originalValue,
@@ -310,13 +328,37 @@ namespace SQLiScanner.Modules
 
                 string textTrue = ExtractPlainText(htmlTrue!);
                 string textFalse = ExtractPlainText(htmlFalse!);
-                if (IsSimilar(textTrue, textFalse, bytesTrue.Length, bytesFalse.Length, 0.05))
+
+                var similarityState = EvaluateSimilarity(textTrue, textFalse, bytesTrue.Length, bytesFalse.Length, 0.05, 0.20);
+                if (similarityState == SimilarityResult.Similar)
                 {
                     Logger.Warning($"Phát hiện sự trùng nhau ở dung lượng cả 2. True({bytesTrue.Length}) ~ False({bytesFalse.Length})");
                     continue;
                 }
 
                 //BÁO CÁO PHÁT HIỆN TRƯỜNG HỢP ĐẶC BIỆT KHI MÃ PHẢN HỒI CẢ 2 GIỐNG NHAU NHƯNG DUNG LƯỢNG CẢ 2 LẠI KHÁC.
+                if (similarityState == SimilarityResult.GreyZone)
+                {
+                    Logger.Process("Phát hiện vùng xám. Đang kích hoạt AI để thẩm định ngữ cảnh");
+
+                    string diffText = ExtractDiffText(textTrue, textFalse);
+                    AiContextRequestPayload? conTextForAI = await GetContextForAI(htmlTrue!, htmlFalse!, diffText, target.FullUrl);
+                    if (conTextForAI == null)
+                    {
+                        continue;
+                    }
+
+                    AiContextResponse response = await _aiApiClient.AnalyzeSqlInjectionAsync(conTextForAI);
+                    if (!response.IsVulnerable)
+                    {
+                        Logger.Warning("AI thẩm định: Đây là dương tính giả (False Positive) do thay đổi nội dung động. Bỏ qua.");
+                        continue;
+                    }
+
+                    Logger.Success("AI thẩm định: XÁC NHẬN đây là thay đổi do SQL Injection!");
+                    Logger.Success($"Nguyên nhân: {response.Reason}");
+                }
+
                 Logger.Process("Đang xác định kịch bản phát hiện...");
                 (string? htmlBase, byte[]? bytesBase, _) =
                     await SendRequestAsync(target, paramName, originalValue);
@@ -329,11 +371,17 @@ namespace SQLiScanner.Modules
                 }
                 string textBase = ExtractPlainText(htmlBase!);
 
-                if (IsSimilar(textBase!, textTrue, bytesBase.Length, bytesTrue.Length, 0.05))
+                // So sánh Base với True
+                var baseVsTrue = EvaluateSimilarity(textBase, textTrue, bytesBase.Length, bytesTrue.Length, 0.05, 0.20);
+                // So sánh Base với False
+                var baseVsFalse = EvaluateSimilarity(textBase, textFalse, bytesBase.Length, bytesFalse.Length, 0.05, 0.20);
+
+                // Vì đã qua phễu lọc mà vẫn chưa nhận định được vùng xám nên cứ mặc định là giống nhau
+                if (baseVsTrue == SimilarityResult.Similar || baseVsTrue == SimilarityResult.GreyZone)
                 {
                     Logger.Success("Kịch bản phát hiện: Base giống True, nhưng khác False.");
                 }
-                else if (IsSimilar(textBase!, textFalse, bytesBase.Length, bytesFalse.Length, 0.05))
+                else if (baseVsFalse == SimilarityResult.Similar || baseVsFalse == SimilarityResult.GreyZone)
                 {
                     Logger.Success("Kịch bản phát hiện (Bypass/Login): Base giống False, nhưng True lại ra kết quả mới.");
                 }
@@ -341,15 +389,13 @@ namespace SQLiScanner.Modules
                 {
                     Logger.Success("Kịch bản phát hiện: Cả True và False đều làm thay đổi trang web so với Base.");
                 }
-
                 return GetDbTypeFromString(payloads.DBMS);
             }
 
-            //Để đây để không bị lỗi cú pháp
-            return DbType.Unknow;
+            return DatabaseType.Unknow;
         }
 
-        private async Task<DbType> TestTimeBasedPayloadAsync(
+        private async Task<DatabaseType> TestTimeBasedPayloadAsync(
             CrawlResult target,
             string paramName,
             string originalValue,
@@ -373,11 +419,11 @@ namespace SQLiScanner.Modules
                 {
                     Logger.Process($"Kiểm tra lần {i}");
                     var (success, ms, status) = await SendRequestWithTimingAsync(target, paramName, originalValue);
-                    Logger.Response(status,null, $"Thời gian phản hồi: {ms}ms");
+                    Logger.Response(status, null, $"Thời gian phản hồi: {ms}ms");
                     if (success) baselineDelays.Add(ms);
                 }
 
-                if (baselineDelays.Count == 0) return DbType.Unknow; // Mất mạng
+                if (baselineDelays.Count == 0) return DatabaseType.Unknow; // Mất mạng
                 long maxBaseline = baselineDelays.Max();
                 Logger.Info($"Thời gian phản hồi chậm nhất trong 3 lần đo: {maxBaseline}ms");
                 long avgBaseline = (long)baselineDelays.Average();
@@ -386,7 +432,7 @@ namespace SQLiScanner.Modules
                 if (avgBaseline > 4000)
                 {
                     Logger.Warning($"Mạng quá chậm (Ping ~{avgBaseline}ms). Bỏ qua Time-Based để tránh False Positive.");
-                    return DbType.Unknow;
+                    return DatabaseType.Unknow;
                 }
 
                 // TÍNH TOÁN NGƯỠNG (THRESHOLD): Thời gian delay tối đa của mạng + Thời gian Sleep (trừ hao 500ms sai số)
@@ -398,7 +444,7 @@ namespace SQLiScanner.Modules
                 // 2. GỬI PAYLOAD TRUE (CÓ LỆNH SLEEP)
                 Logger.Process($"Gửi Payload chứa hàm SLEEP: [{fullPayload}]");
                 var sleepResponse = await SendRequestWithTimingAsync(target, paramName, fullPayload);
-                Logger.Response(sleepResponse.statusCode ,null, $"Thời gian phản hồi: {sleepResponse.elapsedMs}");
+                Logger.Response(sleepResponse.statusCode, null, $"Thời gian phản hồi: {sleepResponse.elapsedMs}");
                 if (sleepResponse.elapsedMs >= thresholdMs || (!sleepResponse.isSuccess && sleepResponse.elapsedMs >= sleepMilliseconds))
                 {
                     Logger.Success($"[!] Phát hiện độ trễ bất thường: {sleepResponse.elapsedMs}ms. Đang Double-Check...");
@@ -406,13 +452,13 @@ namespace SQLiScanner.Modules
 
                     Logger.Process("Kiểm tra lại thời gian phản hồi khi không có payload");
                     var doubleCheck = await SendRequestWithTimingAsync(target, paramName, originalValue);
-                    Logger.Response(doubleCheck.statusCode ,null, $"Thời gian phản hồi: {doubleCheck.elapsedMs}");
+                    Logger.Response(doubleCheck.statusCode, null, $"Thời gian phản hồi: {doubleCheck.elapsedMs}");
 
                     if (doubleCheck.isSuccess && doubleCheck.elapsedMs <= maxBaseline + 1000) // Cho phép xê dịch 1s
                     {
 
                         Logger.Success($"Hàm SLEEP có tác dụng với thời gian phản hồi Payload độc ({sleepResponse.elapsedMs}) > {thresholdMs}");
-                        DbType dbType = GetDbTypeFromString(payloads.DBMS);
+                        DatabaseType dbType = GetDbTypeFromString(payloads.DBMS);
                         Logger.Success($"Server sử dụng {payloads.DBMS} làm cơ sở dữ liệu!");
                         return dbType;
                     }
@@ -424,31 +470,45 @@ namespace SQLiScanner.Modules
 
                 Logger.Warning($"Payload [{payload}] chứa hàm SLEEP không hoạt động");
             }
-            return DbType.Unknow;
+            return DatabaseType.Unknow;
         }
 
-        private bool IsSimilar(string html1, string html2, int length1,
-                               int length2, double tolerancePercent)
+        private SimilarityResult EvaluateSimilarity(string html1, string html2, int length1,
+                               int length2, double acceptableDiffThreshold = 0.05, double greyZoneThreshold = 0.20)
         {
             if (length1 == length2 && html1 == html2)
-                return true;
+                return SimilarityResult.Similar;
 
             int maxLength = Math.Max(length1, length2);
-            if (maxLength == 0)
-                return true;
-
             // Kiểm tra dung lượng từ 2 response
             double diffRatio = (double)Math.Abs(length1 - length2) / maxLength;
 
-            if (diffRatio > tolerancePercent)
+            if (diffRatio <= acceptableDiffThreshold)
             {
-                return false;
+                return SimilarityResult.Similar;
+            }
+
+            if (diffRatio >= greyZoneThreshold)
+            {
+                return SimilarityResult.Different;
             }
 
             // Độ lệch ít, nghi ngờ là do dynamic content nên cần kiểm tra nội dung text thô từ html
             // Kiểm tra nội dung từ 2 response
             double similarity = GetContentSimilarity(html1, html2);
-            return similarity >= (1.0 - tolerancePercent);
+
+            if (similarity >= (1.0 - acceptableDiffThreshold))
+            {
+                return SimilarityResult.Similar;
+            }
+
+            if (similarity <= (1.0 - greyZoneThreshold))
+            {
+                return SimilarityResult.Different;
+            }
+
+            //Cần được AI xác nhận
+            return SimilarityResult.GreyZone;
         }
 
 
@@ -483,6 +543,94 @@ namespace SQLiScanner.Modules
             return (double)intersectionCount / unionCount;
         }
 
+        private async Task<AiContextRequestPayload?> GetContextForAI(string baseHtml, string errorHtml, string diffText, string targetUrl)
+        {
+            var parser = new HtmlParser();
+
+            var documentBaseTask = parser.ParseDocumentAsync(baseHtml);
+            var documentFalseTask = parser.ParseDocumentAsync(errorHtml);
+
+            await Task.WhenAll(documentBaseTask, documentFalseTask);
+            var documentBase = documentBaseTask.Result;
+            var documentFalse = documentFalseTask.Result;
+
+            var changedElementFalse = documentFalse.All.FirstOrDefault(m => m.TextContent.Contains(diffText));
+            // Tránh trường hợp lấy Full DOM. Vì thẻ duy nhất không có cha là thẻ <html>
+            if (changedElementFalse?.ParentElement == null) return null;
+
+            // Lấy nội dung của thẻ cha sau khi chèn Payload
+            string cssPath = BuildCssPath(changedElementFalse);
+            // Lấy thông tin Title
+            string pageTitle = documentFalse.Title ?? "Không có Title";
+
+            // Tìm context chứa DiffText ở html trước khi chèn payload dựa vào thông tin có được từ cssPath
+            IElement? matchedBaseElement = null;
+            var currentSearchNode = changedElementFalse.ParentElement;
+            while (currentSearchNode != null && currentSearchNode.LocalName != "html")
+            {
+                string currentPath = BuildCssPath(currentSearchNode);
+                matchedBaseElement = documentBase.QuerySelector(currentPath);
+                if (matchedBaseElement != null)
+                {
+                    // Tìm thấy "điểm neo" thành công
+                    break;
+                }
+                currentSearchNode = currentSearchNode.ParentElement;
+            }
+
+            string htmlBefore = matchedBaseElement != null
+                ? matchedBaseElement.OuterHtml
+                : "Không tìm thấy bối cảnh đối xứng ở Request gốc";
+            string htmlAfter = (matchedBaseElement != null && currentSearchNode != null)
+                ? currentSearchNode.OuterHtml
+                : changedElementFalse.ParentElement.OuterHtml;
+
+            return new AiContextRequestPayload(
+                Url: targetUrl,
+                PageTitle: pageTitle,
+                CssPath: matchedBaseElement != null ? BuildCssPath(currentSearchNode!) : cssPath,
+                HtmlBefore: htmlBefore,
+                HtmlAfter: htmlAfter
+            );
+        }
+
+        private string BuildCssPath(IElement element)
+        {
+            StringBuilder path = new StringBuilder();
+            var current = element;
+
+            while (current != null && current.LocalName != "html")
+            {
+                string identifier = current.LocalName;
+                // ID luôn tồn tại ở cả 2 request nên ta tạo "điểm neo" ở đây để chút có thể lấy path này làm query selector
+                if (!string.IsNullOrEmpty(current.Id))
+                {
+                    identifier += $"#{current.Id}";
+                    path.Insert(0, identifier + (path.Length > 0 ? ">" : ""));
+                    break;
+                }
+
+                var anchorAttribute = current.Attributes.FirstOrDefault(a =>
+                    a.Name.StartsWith("data-") ||
+                    a.Name == "name");
+
+                if (anchorAttribute != null)
+                {
+                    identifier += $"[{anchorAttribute.Name}=\"{anchorAttribute.Value}\"]";
+                    path.Insert(0, identifier + (path.Length > 0 ? " > " : ""));
+                    break;
+                }
+
+                if (current.ClassList.Length > 0)
+                {
+                    identifier += $".{string.Join(".", current.ClassList)}";
+                }
+
+                path.Insert(0, identifier + (path.Length > 0 ? " > " : ""));
+                current = current.ParentElement;
+            }
+            return path.ToString();
+        }
         // Loại bỏ toàn bộ thẻ HTML, script và chỉ giữa lại văn bản thuần
         private string ExtractPlainText(string html)
         {
@@ -507,16 +655,46 @@ namespace SQLiScanner.Modules
             return result;
         }
 
-        private DbType GetDbTypeFromString(string dbmsName)
+        private string ExtractDiffText(string originalText, string errorText)
+        {
+            if (string.IsNullOrEmpty(originalText) || string.IsNullOrEmpty(errorText) || originalText == errorText)
+                return string.Empty;
+
+            int start = 0;
+            int endOriginal = originalText.Length - 1;
+            int endError = errorText.Length - 1;
+
+            // Cắt tiền tố (từ trên xuống)
+            while (start <= endOriginal && start <= endError && originalText[start] == errorText[start])
+            {
+                start++;
+            }
+
+            // Cắt hậu tố (từ dưới lên)
+            while (endOriginal >= start && endError >= start && originalText[endOriginal] == errorText[endError])
+            {
+                endOriginal--;
+                endError--;
+            }
+
+            if (endError >= start)
+            {
+                return errorText.Substring(start, endError - start + 1).Trim();
+            }
+
+            return string.Empty;
+        }
+
+        private DatabaseType GetDbTypeFromString(string dbmsName)
         {
             string name = dbmsName?.ToLower() ?? "";
-            if (name.Contains("mysql")) return DbType.MySQL;
-            if (name.Contains("mssql") || name.Contains("sql server")) return DbType.MSSQL;
-            if (name.Contains("postgresql")) return DbType.PostgreSQL;
-            if (name.Contains("oracle")) return DbType.Oracle;
-            if (name.Contains("sqlite")) return DbType.SQLite;
+            if (name.Contains("mysql")) return DatabaseType.MySQL;
+            if (name.Contains("mssql") || name.Contains("sql server")) return DatabaseType.MSSQL;
+            if (name.Contains("postgresql")) return DatabaseType.PostgreSQL;
+            if (name.Contains("oracle")) return DatabaseType.Oracle;
+            if (name.Contains("sqlite")) return DatabaseType.SQLite;
 
-            return DbType.Unknow;
+            return DatabaseType.Unknow;
         }
         #endregion
     }

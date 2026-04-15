@@ -1,4 +1,5 @@
 ﻿using SQLiScanner.Models;
+using SQLiScanner.Models.Enums;
 using SQLiScanner.Utility;
 using System;
 using System.Collections.Generic;
@@ -78,7 +79,7 @@ namespace SQLiScanner.Modules
             Console.WriteLine("\n[+] Bắt đầu tìm cột hiển thị (UNION SELECT)");
 
             List<int> visibleCols = new List<int>();
-            string fromTable = detectedData.DatabaseType == DbType.Oracle ? " FROM DUAL" : "";
+            string fromTable = detectedData.DatabaseType == DatabaseType.Oracle ? " FROM DUAL" : "";
             string originalValue = target.Params[detectedData.VulnerableParam];
 
             for (int i = 0; i < colCount; i++)

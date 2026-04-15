@@ -27,16 +27,12 @@ namespace SQLiScanner.Modules
             HttpClient httpClient)
         {
             string baseDir = AppDomain.CurrentDomain.BaseDirectory;
-            string boundariesXmlPath = Path.Combine(baseDir, "Resources", "boundaries.xml");
-            string errorBasedXmlPath = Path.Combine(baseDir, "Resources", "Payloads", "error_based.xml");
-            string booleanBlindXmlPath = Path.Combine(baseDir, "Resources", "Payloads", "boolean_blind.xml");
-            string timeBlindXmlPath = Path.Combine(baseDir, "Resources", "Payloads", "time_blind.xml");
 
             _client = httpClient;
-            _boundariesXmlPath = boundariesXmlPath;
-            _errorBasedXmlPath = errorBasedXmlPath;
-            _booleanBlindXmlPath = booleanBlindXmlPath;
-            _timeBlindXmlPath = timeBlindXmlPath;
+            _boundariesXmlPath = Path.Combine(baseDir, "Resources", "boundaries.xml");
+            _errorBasedXmlPath = Path.Combine(baseDir, "Resources", "Payloads", "error_based.xml");
+            _booleanBlindXmlPath = Path.Combine(baseDir, "Resources", "Payloads", "boolean_blind.xml");
+            _timeBlindXmlPath = Path.Combine(baseDir, "Resources", "Payloads", "time_blind.xml");
         }
 
         public async Task<HeuristicResult> PerformHeuristicScanAsync(CrawlResult target, string paramName)
