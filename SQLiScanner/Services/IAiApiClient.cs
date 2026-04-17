@@ -1,5 +1,5 @@
+using DataSchema;
 using System.Threading.Tasks;
-using SQLiScanner.DTOs;
 
 namespace SQLiScanner.Services
 {

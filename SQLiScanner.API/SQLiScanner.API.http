@@ -1,0 +1,6 @@
+@SQLiScanner.API_HostAddress = http://localhost:5260
+
+GET {{SQLiScanner.API_HostAddress}}/weatherforecast/
+Accept: application/json
+
+###

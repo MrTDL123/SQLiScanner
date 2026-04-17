@@ -19,4 +19,8 @@
     <Folder Include="Resources\Payloads\" />
   </ItemGroup>
 
+  <ItemGroup>
+    <ProjectReference Include="..\DataSchema\DataSchema.csproj" />
+  </ItemGroup>
+
 </Project>

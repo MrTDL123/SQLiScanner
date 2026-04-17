@@ -14,10 +14,9 @@ using AngleSharp;
 using AngleSharp.Dom;
 using AngleSharp.Html.Parser;
 using AngleSharp.Text;
-using SQLiScanner.DTOs;
 using System.Diagnostics.CodeAnalysis;
 using SQLiScanner.Services;
-
+using DataSchema;
 namespace SQLiScanner.Modules
 {
     public enum SimilarityResult

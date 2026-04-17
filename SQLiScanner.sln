@@ -7,6 +7,8 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "SQLiScanner", "SQLiScanner\
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "DataSchema", "DataSchema\DataSchema.csproj", "{D245C918-5A50-4A9F-95A7-51990C52E49A}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "SQLiScanner.API", "SQLiScanner.API\SQLiScanner.API.csproj", "{928E0AF6-4068-3DB2-3EBC-9260F6473E2C}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -21,6 +23,10 @@ Global
 		{D245C918-5A50-4A9F-95A7-51990C52E49A}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{D245C918-5A50-4A9F-95A7-51990C52E49A}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{D245C918-5A50-4A9F-95A7-51990C52E49A}.Release|Any CPU.Build.0 = Release|Any CPU
+		{928E0AF6-4068-3DB2-3EBC-9260F6473E2C}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{928E0AF6-4068-3DB2-3EBC-9260F6473E2C}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{928E0AF6-4068-3DB2-3EBC-9260F6473E2C}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{928E0AF6-4068-3DB2-3EBC-9260F6473E2C}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE

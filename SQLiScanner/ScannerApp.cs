@@ -68,7 +68,7 @@ namespace SQLiScanner
             };
             // DatabaseDetecotr xác định database và UnionDetector khai thác
             List<DetectionResult> results = new();
-            foreach (var target in targetsDemo)
+            foreach (var target in targets)
             {
                 DetectionResult result = await _dbDetector.DetectAsync(target);
 

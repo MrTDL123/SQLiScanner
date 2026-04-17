@@ -27,7 +27,7 @@ namespace SQLiScanner
 
             services.AddHttpClient<IAiApiClient, AiApiClient>(client =>
             {
-                client.BaseAddress = new Uri("https://localhost:5001/");
+                client.BaseAddress = new Uri("https://localhost:7236/");
                 client.Timeout = TimeSpan.FromSeconds(60);
             });
 
