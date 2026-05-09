@@ -12,7 +12,7 @@ namespace SQLiScanner.Utilities
 {
     public static class PayloadLoader
     {
-        private static ConcurrentDictionary<int, List<PayloadTest>> _cachedPayloads = new();
+        private static ConcurrentDictionary<int, List<PayloadType>> _cachedPayloads = new();
         private static List<Boundary> _cachedBoundaries;
 
         private static readonly SemaphoreSlim _boundaryLock = new SemaphoreSlim(1, 1);
@@ -66,7 +66,7 @@ namespace SQLiScanner.Utilities
                 }
 
                 _cachedBoundaries = boundaries;
-                Logger.Success("Đã load thành công boundary!");
+                //Logger.Success("Đã load thành công boundary!");
                 return boundaries;
             }
             catch (Exception ex)
@@ -79,7 +79,7 @@ namespace SQLiScanner.Utilities
             }
         }
 
-        public static async Task<List<PayloadTest>> LoadPayloadAsync(string filePath, int stype)
+        public static async Task<List<PayloadType>> LoadPayloadAsync(string filePath, int stype)
         {
             if (_cachedPayloads.TryGetValue(stype, out var cachedPayload))
                 return cachedPayload;
@@ -93,7 +93,7 @@ namespace SQLiScanner.Utilities
                 if (_cachedPayloads.TryGetValue(stype, out var cachedValueSecondCheck))
                     return cachedValueSecondCheck;
 
-                var payloads = new List<PayloadTest>();
+                var payloads = new List<PayloadType>();
 
                 using (var stream = new FileStream(filePath, FileMode.Open, FileAccess.Read, FileShare.Read, 4096, useAsync: true))
                 {
@@ -109,7 +109,7 @@ namespace SQLiScanner.Utilities
                             if (testSType != 0 && testSType != stype)
                                 continue;
 
-                            var test = new PayloadTest
+                            var test = new PayloadType
                             {
                                 Title = element.Element("title")?.Value ?? "",
                                 SType = testSType,
@@ -158,7 +158,7 @@ namespace SQLiScanner.Utilities
                 }
 
                 _cachedPayloads[stype] = payloads;
-                Logger.Success($"Đã load thành công {payloads.Count} payloads (stype={stype}))");
+                //Logger.Success($"Đã load thành công {payloads.Count} payloads (stype={stype}))");
                 return payloads;
             }
             catch (Exception ex)

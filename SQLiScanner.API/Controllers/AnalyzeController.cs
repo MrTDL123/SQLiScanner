@@ -17,10 +17,11 @@ namespace SQLiScanner.API.Controllers
             _logger = logger;
         }
 
-        // Tạo endpoint POST tại đường dẫn: api/analyze/context
+        //Tạo endpoint POST tại đường dẫn: api/analyze/context
         [HttpPost("context")]
         public async Task<IActionResult> AnalyzeContext([FromBody] AiContextRequestPayload payload)
         {
+
             _logger.LogInformation($"[NHẬN REQUEST] Đang phân tích URL: {payload.Url}");
 
             if (payload == null || string.IsNullOrWhiteSpace(payload.Url))

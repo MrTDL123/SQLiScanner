@@ -13,7 +13,7 @@ namespace SQLiScanner.Models
 
         public List<Boundary> ApplicableBoundaries { get; set; } = new();
 
-        public List<PayloadTest> ApplicablePayloads { get; set; } = new();
+        public List<PayloadType> ApplicablePayloads { get; set; } = new();
 
         // Boundary được chốt - dùng cho các giai đoạn sau
         public Boundary? LockedBoundary { get; set; }

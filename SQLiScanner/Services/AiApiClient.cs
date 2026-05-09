@@ -1,6 +1,7 @@
 using System;
 using System.Net.Http;
 using System.Net.Http.Json;
+using System.Text.Json;
 using System.Threading.Tasks;
 using DataSchema;
 using SQLiScanner.Utility;
@@ -16,6 +17,11 @@ namespace SQLiScanner.Services
         }
         public async Task<AiContextResponse> AnalyzeSqlInjectionAsync(AiContextRequestPayload payload)
         {
+            // DEBUG
+            //var jsonDebug = JsonSerializer.Serialize(payload, new JsonSerializerOptions { WriteIndented = true});
+            //await File.WriteAllTextAsync("payload_debug.json", jsonDebug);
+            await Task.Delay(5000); 
+            return new AiContextResponse(true, "Mock Result");
             try
             {
                 HttpResponseMessage response = await _httpClient.PostAsJsonAsync("api/analyze/context", payload);
