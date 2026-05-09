@@ -57,7 +57,7 @@ namespace SQLiScanner.Models
             }
         }
 
-        public List<PayloadTest> ApplicablePayloads { get; set; } = new();
+        public List<PayloadType> ApplicablePayloads { get; set; } = new();
 
         // Giá trị:
         //   - "SUCCESS" = Đã lock boundary & load payloads

@@ -7,7 +7,7 @@ using Microsoft.VisualBasic;
 
 namespace SQLiScanner.Models
 {
-    public class PayloadTest
+    public class PayloadType
     {
         // Tiêu đề payload
         // Ví dụ: "MySQL >= 5.1 AND error-based - WHERE clause (EXTRACTVALUE)"
