@@ -103,21 +103,28 @@ namespace SQLiScanner.API.Services
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private string BuildPrompt(AiContextRequestPayload payload)
         {
-            return $@"Bạn là một chuyên gia bảo mật ứng dụng Web (Cybersecurity Expert).
-                    Nhiệm vụ của bạn là phân tích hai đoạn HTML (trước và sau khi chèn payload SQL Injection) để xác định xem trang web có bị lỗi SQL Injection hay không.
+            return $@"Bạn là chuyên gia kiểm thử bảo mật (Pentester). Phân tích bối cảnh sau khi dùng kĩ thuật Boolean-Based để xác định lỗ hổng SQL Injection.
 
                     Thông tin Request:
-                    - Target URL: {payload.Url}
+                    - Target URL: {payload.TargetUrl}
                     - Page Title: {payload.PageTitle}
-                    - CSS Path khu vực bị thay đổi: {payload.CssPath}
+                    
+                    DẤU HIỆU ĐỊNH TUYẾN (CỰC KỲ QUAN TRỌNG CHO AUTH BYPASS):
+                    - URL chèn payload luôn đúng: {payload.TrueUrl}
+                    - URL chèn payload luôn sai: {payload.FalseUrl}
+                    (*) CHÚ Ý: Nếu URL sau khi chèn bị thay đổi (Redirect sang trang quản trị, dashboard, index, v.v.) trong khi URL ban đầu là trang Login/Xác thực, đây là DẤU HIỆU MẠNH của lỗi Authentication Bypass.
 
-                    [HTML TRƯỚC KHI CHÈN PAYLOAD (BASE)]
-                    {payload.HtmlBefore}
+                    BỐI CẢNH HTML TẠI KHU VỰC THAY ĐỔI:
+                    - Vị trí (CSS Path): {payload.CssPath}
+                    - HTML payload luôn đúng: {payload.TrueHtml}
+                    - HTML payload luôn sai: {payload.FalseHtml}
+                    
+                    TIÊU CHÍ PHÂN TÍCH:
+                    1. URL Redirect: Có sự chuyển hướng bất thường nào thể hiện việc đăng nhập thành công hay vượt quyền không?
+                    2. Dấu hiệu Database: Có lộ lỗi syntax SQL (Error-based) hay mất mát/thay đổi dữ liệu rõ rệt do logic True/False (Boolean-based) không?
+                    3. False Positive: Nếu thay đổi chỉ là mã token (CSRF), thời gian, session ID, hoặc thông báo lỗi server chung chung (VD: 404, 403) không liên quan đến DB, hãy đánh giá là an toàn (False Positive).
 
-                    [HTML SAU KHI CHÈN PAYLOAD (FALSE REQUEST)]
-                    {payload.HtmlAfter}
-
-                    Dựa trên sự khác biệt HTML tại CSS Path trên, hãy xác định xem đây có phải là dấu hiệu của SQL Injection không (VD: mất dữ liệu, lộ lỗi SQL syntax, v.v). Nếu chỉ là thay đổi do token động, thời gian hoặc lỗi server chung chung, hãy coi là False Positive (Safe).";
+                    Dựa vào các tiêu chí trên, hãy đưa ra quyết định cuối cùng.";
         }
     }
 }

@@ -20,12 +20,13 @@ namespace SQLiScanner.Modules
         Different, // Khác biệt rõ ràng (< 80%)
         GreyZone   // Vùng xám (80% - 95%) -> Cần AI thẩm định
     }
-
+    // Mảng phục vụ duy nhất hàm GetContextForAI
     public class DatabaseDetector
     {
         private readonly HttpClient _client;
         private readonly AiConcurrencyEngine _aiConcurrencyEngine;
         private readonly ContextAnalyzer _contextAnalyzer;
+        private static readonly string[] CriticalKeywords = { "error", "exception", "syntax", "sql", "500", "warning", "denied", "invalid", "server" };
 
         private bool IsTesting = true;
         public DatabaseDetector(
@@ -287,7 +288,7 @@ namespace SQLiScanner.Modules
             try
             {
                 sw.Start();
-                var (_, _, statusCode) = await SendRequestAsync(target, paramName, payloadValue);
+                var (_, _, statusCode,_) = await SendRequestAsync(target, paramName, payloadValue);
                 sw.Stop();
 
                 return (true, sw.ElapsedMilliseconds, statusCode);
@@ -305,7 +306,7 @@ namespace SQLiScanner.Modules
                 return (false, sw.ElapsedMilliseconds, 0);
             }
         }
-        private async Task<(string? html, byte[]? bytes, int statusCode)> SendRequestAsync(CrawlResult target, string injectKey, string injectValue)
+        private async Task<(string? html, byte[]? bytes, int statusCode, string finalUrl)> SendRequestAsync(CrawlResult target, string injectKey, string injectValue)
         {
             try
             {
@@ -344,13 +345,14 @@ namespace SQLiScanner.Modules
                 var bytes = await response.Content.ReadAsByteArrayAsync();
                 var charset = response.Content.Headers.ContentType?.CharSet;
                 var encoding = charset is not null ? Encoding.GetEncoding(charset) : Encoding.UTF8;
+                string finalUrl = response.RequestMessage.RequestUri.ToString();
 
-                return (encoding.GetString(bytes), bytes, (int)response.StatusCode);
+                return (encoding.GetString(bytes), bytes, (int)response.StatusCode, finalUrl);
             }
             catch (Exception ex)
             {
                 Logger.Error($"Gửi Request thất bại: {ex.Message}");
-                return (null, null, 0);
+                return (null, null, 0, null);
             }
         }
 
@@ -366,7 +368,7 @@ namespace SQLiScanner.Modules
         )
         {
             string injectedPayload = $"{originalValue}{prefix} {payload} {suffix} ";
-            var (html, _, _) = await SendRequestAsync(target, paramName, injectedPayload);
+            var (html, _, _, _) = await SendRequestAsync(target, paramName, injectedPayload);
 
             if (string.IsNullOrEmpty(html))
             {
@@ -415,7 +417,7 @@ namespace SQLiScanner.Modules
             string fullPayloadFalse = $"{originalValue}{prefix} {falsePayload} {suffix} ";
 
             Logger.Process($"[>] TRUE PayLoad {fullPayloadTrue}");
-            (string? htmlTrue, byte[]? bytesTrue, int statusTrue) = await SendRequestAsync(target, paramName, fullPayloadTrue);
+            (string? htmlTrue, byte[]? bytesTrue, int statusTrue, string trueFinalUrl) = await SendRequestAsync(target, paramName, fullPayloadTrue);
             if (bytesTrue == null)
             {
                 Logger.Warning("Mất kết nối hoặc bị WAF chặn. Bỏ qua.");
@@ -425,7 +427,7 @@ namespace SQLiScanner.Modules
             Logger.Response(statusTrue, bytesTrue.Length);
 
             Logger.Process($"[>] FALSE Payload {fullPayloadFalse}");
-            (string? htmlFalse, byte[]? bytesFalse, int statusFalse) = await SendRequestAsync(target, paramName, fullPayloadFalse);
+            (string? htmlFalse, byte[]? bytesFalse, int statusFalse, string falseFinalUrl) = await SendRequestAsync(target, paramName, fullPayloadFalse);
 
             if (bytesFalse == null)
             {
@@ -436,29 +438,32 @@ namespace SQLiScanner.Modules
             Logger.Response(statusFalse, bytesFalse.Length);
 
             // ĐẢM BẢO 2 PHẢN HỒI TỪ PAYLOAD KHÔNG GIỐNG NHAU          
-            //if (statusTrue != statusFalse)
-            //{
-            //    Logger.Success($"Phát hiện khác biệt Status Code: True({statusTrue}) != False({statusFalse})");
-            //    return true;
-            //}
+            if (statusTrue != statusFalse)
+            {
+                Logger.Success($"Phát hiện khác biệt Status Code: True({statusTrue}) != False({statusFalse})");
+                return true;
+            }
 
             string textTrue = ExtractPlainText(htmlTrue!);
             string textFalse = ExtractPlainText(htmlFalse!);
             var similarityState = EvaluateSimilarity(textTrue, textFalse, bytesTrue.Length, bytesFalse.Length, 0.05, 0.20);
 
-            //if (similarityState == SimilarityResult.Similar)
-            //{
-            //    Logger.Warning($"Phát hiện sự trùng nhau ở dung lượng cả 2. True({bytesTrue.Length}) ~ False({bytesFalse.Length})");
-            //    currentState.UpdateStatus(ScanStatus.Safe, "Payload không có tác dụng");
-            //    return false;
-            //}
+            if (similarityState == SimilarityResult.Similar)
+            {
+                Logger.Warning($"Phát hiện sự trùng nhau ở dung lượng cả 2. True({bytesTrue.Length}) ~ False({bytesFalse.Length})");
+                currentState.UpdateStatus(ScanStatus.Safe, "Payload không có tác dụng");
+                return false;
+            }
 
             //BÁO CÁO PHÁT HIỆN TRƯỜNG HỢP ĐẶC BIỆT KHI MÃ PHẢN HỒI CẢ 2 GIỐNG NHAU NHƯNG DUNG LƯỢNG CẢ 2 LẠI KHÁC.
-            if (IsTesting || similarityState == SimilarityResult.GreyZone)
+            if (/*IsTesting || */similarityState == SimilarityResult.GreyZone)
             {
                 Logger.Process("Phát hiện vùng xám. Đang kích hoạt AI để thẩm định ngữ cảnh");
 
-                AiContextRequestPayload? conTextForAI = await GetContextForAI(htmlTrue!, htmlFalse!, target.FullUrl);
+                AiContextRequestPayload? conTextForAI = await GetContextForAI(
+                    htmlTrue!, trueFinalUrl!,
+                    htmlFalse!, falseFinalUrl, 
+                    target.FullUrl);
                 if (conTextForAI != null)
                 {
                     Task aiTask = _aiConcurrencyEngine.EnqueueAnalysisAsync(
@@ -487,15 +492,15 @@ namespace SQLiScanner.Modules
                     );
                     pendingAiTasks.Add(aiTask);
                 }
-                // Ngay lập tức trả về false để luồng chính phân tích Heuristic
                 if (conTextForAI is null)
                     currentState.UpdateStatus(ScanStatus.Safe, $"Không tìm thấy dữ liệu để gửi AI");
 
+                // Ngay lập tức trả về false để luồng chính phân tích Heuristic
                 return false;                
             }
 
             Logger.Process("Đang xác định kịch bản phát hiện...");
-            (string? htmlBase, byte[]? bytesBase, _) =
+            (string? htmlBase, byte[]? bytesBase, _, _) =
                 await SendRequestAsync(target, paramName, originalValue);
 
             if (bytesBase == null)
@@ -679,13 +684,17 @@ namespace SQLiScanner.Modules
 
             return (double)intersectionCount / unionCount;
         }
-
-        private async Task<AiContextRequestPayload?> GetContextForAI(string baseHtml, string errorHtml, string targetUrl)
+        
+        
+        private async Task<AiContextRequestPayload?> GetContextForAI(
+            string trueHtml, string trueFinalUrl,
+            string falseHtml, string falseFinalUrl,
+            string targetUrl)
         {
             var parser = new HtmlParser();
 
-            var documentBaseTask = parser.ParseDocumentAsync(baseHtml);
-            var documentFalseTask = parser.ParseDocumentAsync(errorHtml);
+            var documentBaseTask = parser.ParseDocumentAsync(trueHtml);
+            var documentFalseTask = parser.ParseDocumentAsync(falseHtml);
 
             await Task.WhenAll(documentBaseTask, documentFalseTask);
             var documentBase = documentBaseTask.Result;
@@ -700,13 +709,13 @@ namespace SQLiScanner.Modules
                 .Where(e => !baseFullText.Contains(e.TextContent.Trim()))
                 .ToList();
 
-            string[] criticalKeywords = { "error", "exception", "syntax", "sql", "500", "warning", "denied", "invalid", "server" };
+            
 
             // Vì thẻ cha cũng được tính là chứa được nội dung diffText 
             // nên ta đi tìm thẻ chứa nội dung diffText ít thẻ con nhất
             var changedElementFalse = diffElements
                 .OrderBy(e => e.QuerySelectorAll("*").Length)
-                .ThenByDescending(e => criticalKeywords.Count(k => e.TextContent.Contains(k, StringComparison.OrdinalIgnoreCase)))
+                .ThenByDescending(e => CriticalKeywords.Count(k => e.TextContent.Contains(k, StringComparison.OrdinalIgnoreCase)))
                 .FirstOrDefault();
 
             // Tránh trường hợp lấy Full DOM. Vì thẻ duy nhất không có cha là thẻ <html>
@@ -737,11 +746,13 @@ namespace SQLiScanner.Modules
                 : changedElementFalse.ParentElement.OuterHtml;
 
             return new AiContextRequestPayload(
-                Url: targetUrl,
+                TargetUrl: targetUrl,
                 PageTitle: pageTitle,
                 CssPath: matchedBaseElement != null ? BuildCssPath(currentSearchNode!) : cssPath,
-                HtmlBefore: htmlBefore,
-                HtmlAfter: htmlAfter
+                TrueUrl: trueFinalUrl,
+                TrueHtml: htmlBefore,
+                FalseUrl: falseFinalUrl,
+                FalseHtml: htmlAfter
             );
         }
 

@@ -6,9 +6,11 @@ using System.Threading.Tasks;
 namespace DataSchema
 {
     public record AiContextRequestPayload(
-        string Url,
+        string TargetUrl,
         string PageTitle,
         string CssPath,
-        string HtmlBefore,
-        string HtmlAfter);
+        string TrueUrl,
+        string TrueHtml,
+        string FalseUrl,
+        string FalseHtml);
 }

@@ -20,8 +20,8 @@ namespace SQLiScanner.Services
             // DEBUG
             //var jsonDebug = JsonSerializer.Serialize(payload, new JsonSerializerOptions { WriteIndented = true});
             //await File.WriteAllTextAsync("payload_debug.json", jsonDebug);
-            await Task.Delay(5000); 
-            return new AiContextResponse(true, "Mock Result");
+            //await Task.Delay(5000);
+            //return new AiContextResponse(true, "Mock Result");
             try
             {
                 HttpResponseMessage response = await _httpClient.PostAsJsonAsync("api/analyze/context", payload);
