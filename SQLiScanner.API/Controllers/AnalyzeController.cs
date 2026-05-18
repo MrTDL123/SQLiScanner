@@ -22,9 +22,9 @@ namespace SQLiScanner.API.Controllers
         public async Task<IActionResult> AnalyzeContext([FromBody] AiContextRequestPayload payload)
         {
 
-            _logger.LogInformation($"[NHẬN REQUEST] Đang phân tích URL: {payload.Url}");
+            _logger.LogInformation($"[NHẬN REQUEST] Đang phân tích URL: {payload.TargetUrl}");
 
-            if (payload == null || string.IsNullOrWhiteSpace(payload.Url))
+            if (payload == null || string.IsNullOrWhiteSpace(payload.TargetUrl))
             {
                 _logger.LogWarning("Payload rỗng hoặc thiếu URL!");
                 return BadRequest(new AiContextResponse(false, "Payload không hợp lệ hoặc thiếu Target URL."));

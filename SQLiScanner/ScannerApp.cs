@@ -195,7 +195,7 @@ namespace SQLiScanner
         private void UpdateTableContent(Table table, List<PayloadState> trackingList, string spinner)
         {
             table.Rows.Clear();
-            var activeState = trackingList.Where(s => s.Status != ScanStatus.Pending).TakeLast(20);
+            var activeState = trackingList.Where(s => s.Status != ScanStatus.Pending).TakeLast(50);
 
             foreach (var state in activeState)
             {
