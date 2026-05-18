@@ -12,19 +12,26 @@ builder.Services.AddControllers();
 builder.Services.AddResiliencePipeline("GeminiRetryPipeline", pipelineBuilder =>
 {
     var isTransientError = new PredicateBuilder().Handle<Exception>(ex =>
-            ex is HttpRequestException ||
-            ex is TaskCanceledException || // Lỗi Timeout mạng
-            ex.Message.Contains("429") ||  // Too Many Requests
-            ex.Message.Contains("50")      // Lỗi 500, 503 từ server Google
-    );
+    {
+        if (ex is TaskCanceledException || ex is TimeoutException) return true;
+
+        string msg = ex.Message;
+        return msg.Contains("408") ||
+               msg.Contains("429") ||
+               msg.Contains("500") ||
+               msg.Contains("502") ||
+               msg.Contains("503") ||
+               msg.Contains("504");
+    });
 
     pipelineBuilder.AddRetry(new RetryStrategyOptions
     {
-        MaxRetryAttempts = 3,
+        ShouldHandle = isTransientError,
+        MaxRetryAttempts = 4,
         BackoffType = DelayBackoffType.Exponential,
         Delay = TimeSpan.FromSeconds(1),
-        // Đảm bảo chỉ Retry khi cần thiết
-        ShouldHandle = isTransientError
+        MaxDelay = TimeSpan.FromSeconds(60),
+        UseJitter = true //Rất quan trọng để tránh "Thundering Herd" (nhiều luồng cùng gửi lại 1 lúc làm sập tiếp API)
     });
 
     pipelineBuilder.AddCircuitBreaker(new CircuitBreakerStrategyOptions
@@ -37,6 +44,9 @@ builder.Services.AddResiliencePipeline("GeminiRetryPipeline", pipelineBuilder =>
         MinimumThroughput = 5,
         BreakDuration = TimeSpan.FromSeconds(30)
     });
+
+    // Thêm Timeout tổng quát cho toàn bộ Pipeline
+    pipelineBuilder.AddTimeout(TimeSpan.FromMinutes(2));
 });
 
 

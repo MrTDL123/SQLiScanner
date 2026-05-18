@@ -25,7 +25,7 @@
         <title>Oracle Boolean-Based Blind</title>
         <stype>1</stype>
         <dbms>Oracle</dbms>
-        <payload>AND USER=USER</payload>
+        <payload>AND RAWTOHEX('AB')=RAWTOHEX('AB')</payload>
     </test>
 
     <test>

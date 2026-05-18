@@ -437,7 +437,7 @@ namespace SQLiScanner.Modules
             }
             Logger.Response(statusFalse, bytesFalse.Length);
 
-            // ĐẢM BẢO 2 PHẢN HỒI TỪ PAYLOAD KHÔNG GIỐNG NHAU          
+            //ĐẢM BẢO 2 PHẢN HỒI TỪ PAYLOAD KHÔNG GIỐNG NHAU
             if (statusTrue != statusFalse)
             {
                 Logger.Success($"Phát hiện khác biệt Status Code: True({statusTrue}) != False({statusFalse})");
