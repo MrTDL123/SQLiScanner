@@ -32,7 +32,9 @@ namespace SQLiScanner.Modules
             // Queue lưu trữ URL và độ sâu hiện tại của nó
             Queue<(string Url, int Depth)> urlQueue = new Queue<(string, int)>();
             urlQueue.Enqueue((rootUrl, 0));
-            _visitedUrls.Add(rootUrl);
+
+            string rootBase = rootUrl.Split('?')[0];
+            _visitedUrls.Add(rootBase);
 
             while (urlQueue.Count > 0)
             {
@@ -41,7 +43,6 @@ namespace SQLiScanner.Modules
                     Console.WriteLine("Đã đạt giới hạn an toàn 10,000 trang. Dừng quét.");
                     return results;
                 }
-
 
                 var (currentUrl, currentDepth) = urlQueue.Dequeue();
                 Console.WriteLine($"\n--- ĐỘ SÂU {currentDepth}: Kiểm tra URL khả thi trong [{currentUrl}] ---");
@@ -78,18 +79,17 @@ namespace SQLiScanner.Modules
             try
             {
                 // Lấy phần gốc (VD: http://site.com/news.php?id=1 -> http://site.com/news.php)
-                Uri uri = new Uri(fullUrl);
-                string basePath = uri.GetLeftPart(UriPartial.Path);
+                string basePath = fullUrl.Split('?')[0];
 
                 // Lấy các tham số tồn tại trong url để đối chiếu, sắp xếp để không quan tâm thứ tự
-                List<string> sortedParams = paramNames.OrderBy(p => p).ToList();
+                List<string> sortedParams = paramNames.Where(p => p != null).OrderBy(p => p).ToList();
                 string paramString = string.Join(",", sortedParams);
 
                 return $"{method.ToUpper()}|{basePath}|{paramString}";
             }
             catch
             {
-                return fullUrl;
+                return $"{method.ToUpper()}|{fullUrl}";
             }
         }
 
@@ -103,8 +103,6 @@ namespace SQLiScanner.Modules
             int currentDepth,
             int maxDepth)
         {
-
-
             //tìm tất cả thẻ a có thuộc tính href
             var linkNodes = doc.DocumentNode.SelectNodes("//a[@href]");
             if (linkNodes == null) return;
@@ -113,20 +111,19 @@ namespace SQLiScanner.Modules
             {
                 string href = node.GetAttributeValue("href", "").Trim();
 
-                if(href.Contains("AJAX") && currentDepth == 1)
-                {
-                    Console.WriteLine();
-                }
-
-                if (string.IsNullOrEmpty(href) || href.Contains("#") || href.StartsWith("javascript") || href.StartsWith("mailto")) 
+                if (string.IsNullOrEmpty(href) || href.Contains("#") ||
+                    href.StartsWith("javascript:", StringComparison.OrdinalIgnoreCase) ||
+                    href.StartsWith("mailto:", StringComparison.OrdinalIgnoreCase))
                     continue;
 
                 string? fullUrl = NormalizeUrl(rootUrl, currentUrl, href);
-
                 if (fullUrl == null) continue;
 
                 if(fullUrl.Contains("?"))
                 {
+                    string cleanUrl = fullUrl.Split('?')[0];
+                    string rawQuery = fullUrl.Split('?')[1];
+
                     //Kiểm tra trùng lặp cú pháp query
                     var uri = new Uri(fullUrl);
                     var queryParams = HttpUtility.ParseQueryString(uri.Query);
@@ -134,20 +131,21 @@ namespace SQLiScanner.Modules
 
                     if (paramNames.Count > 0)
                     {
-                        string signature = GetUrlSignature(fullUrl, "GET", paramNames);
+                        string signature = GetUrlSignature(cleanUrl, "GET", paramNames);
 
                         if (!_scannedSignatures.Contains(signature))
                         {
                             _scannedSignatures.Add(signature);
                             var paramsDict = new Dictionary<string, string>();
-                            foreach (var key in paramNames) paramsDict[key] = queryParams[key];
+                            foreach (var key in paramNames) paramsDict[key!] = queryParams[key] ?? "";
 
                             results.Add(new CrawlResult
                             {
-                                FullUrl = fullUrl,
+                                BaseUrl = cleanUrl,
                                 HttpMethod = "GET",
                                 IsForm = false,
-                                Params = paramsDict
+                                Params = paramsDict,
+                                RawQueryString = rawQuery
                             });
                         }
                     }
@@ -169,6 +167,8 @@ namespace SQLiScanner.Modules
         }
 
         //LỌC TÌM THẺ <FORM>
+        // Lưu ý: hàm ExtractForm sẽ kiểm tra Url có tham số Query
+        // Dù là lấy thẻ Form nhưng nếu link đang xét lại tồn tại tham số Query thì cũng xét luôn
         private void ExtractForms(string currentUrl, HtmlDocument doc, List<CrawlResult> results)
         {
             var formNodes = doc.DocumentNode.SelectNodes("//form");
@@ -180,12 +180,16 @@ namespace SQLiScanner.Modules
 
                 string? submitUrl = string.IsNullOrEmpty(action) ? currentUrl : NormalizeUrl(currentUrl, currentUrl, action);
                 if (submitUrl is null) continue;
+                
+                // Lấy Url và tham số query
+                string cleanUrl = submitUrl.Split('?')[0];
+                string rawQuery = submitUrl.Contains("?") ? submitUrl.Split('?')[1] : string.Empty;
+
+                var formParams = new Dictionary<string, string>();
 
                 // Tìm tất cả thẻ input, textarea, select trong form
                 // .// nghĩa là tìm con cháu của node hiện tại
                 var inputNodes = form.SelectNodes(".//input | .//textarea | .//select");
-                var formParams = new Dictionary<string, string>();
-
                 if(inputNodes != null)
                 {
                     foreach(var input in inputNodes)
@@ -211,36 +215,40 @@ namespace SQLiScanner.Modules
                     }
                 }
 
-                if (formParams.Count > 0)
+                if (formParams.Count > 0 || !string.IsNullOrEmpty(rawQuery))
                 {
-                    string signature = GetUrlSignature(submitUrl, method, formParams.Keys);
+                    string signature = GetUrlSignature(cleanUrl, method, formParams.Keys);
                     if (!_scannedSignatures.Contains(signature))
                     {
                         _scannedSignatures.Add(signature);
-                        string resultUrl = submitUrl;
-
+                        string resultUrl = cleanUrl;
                         if (method == "GET")
                         {
                             var queryList = formParams.Select(p => $"{p.Key}={p.Value}");
-                            if (!resultUrl.Contains("?")) resultUrl += "?" + string.Join("&", queryList);
-                            else resultUrl += "&" + string.Join("&", queryList);
-                        }
+                            resultUrl = cleanUrl + "?" + string.Join("&", queryList);
 
-                        results.Add(new CrawlResult
-                        {
-                            FullUrl = resultUrl,
-                            HttpMethod = method,
-                            IsForm = true,
-                            Params = formParams
-                        });
-
-                        if (method == "GET")
-                        {
+                            results.Add(new CrawlResult
+                            {
+                                BaseUrl = cleanUrl,
+                                HttpMethod = "GET",
+                                IsForm = true,
+                                Params = formParams,
+                                RawQueryString = string.Join("&", queryList)
+                            });
                             Console.WriteLine($"    [->] Queueing: [FORM-GET] {resultUrl}");
                         }
                         else
                         {
-                            Console.WriteLine($"    [->] Queueing: [FORM-POST] {submitUrl} (Inputs: {string.Join(", ", formParams.Keys)})");
+                            results.Add(new CrawlResult
+                            {
+                                BaseUrl = cleanUrl,       // URL sạch sẽ không chứa kí tự bẩn
+                                HttpMethod = "POST",
+                                IsForm = true,
+                                Params = formParams,      // Sạch sẽ, không chứa rác từ thanh URL
+                                RawQueryString = rawQuery // Giữ lại nguyên vẹn cấu hình lai "RetURL=..." ở đây
+                            });
+
+                            Console.WriteLine($"    [->] Queueing: [FORM-POST] {cleanUrl} (Query: {rawQuery} | Body Inputs: {string.Join(", ", formParams.Keys)})");
                         }
                     }
                 }
@@ -257,8 +265,8 @@ namespace SQLiScanner.Modules
             foreach (var script in scriptNodes)
             {
                 string jsContent = "";
-
                 string src = script.GetAttributeValue("src", "");
+
                 if (string.IsNullOrEmpty(src))
                 {
                     jsContent = script.InnerText;
@@ -313,16 +321,19 @@ namespace SQLiScanner.Modules
 
                     if (fullUrl.Contains("?"))
                     {
+                        string cleanUrl = fullUrl.Split('?')[0];
+                        string rawQuery = fullUrl.Split('?')[1];
+
                         var uri = new Uri(fullUrl);
                         var queryParams = HttpUtility.ParseQueryString(uri.Query);
                         var paramNames = queryParams.AllKeys.Where(k => k != null).ToList();
                         if (paramNames.Count == 0) continue;
 
-                        string signature = GetUrlSignature(fullUrl, "GET", paramNames);
+                        string signature = GetUrlSignature(cleanUrl, "GET", paramNames);
                         if (_scannedSignatures.Contains(signature)) continue;
 
                         _scannedSignatures.Add(signature);
-                        var paramsDict = paramNames.ToDictionary(k => k, k => queryParams[k] ?? "");
+                        var paramsDict = paramNames.ToDictionary(k => k!, k => queryParams[k] ?? "");
 
                         // Lọc các URL rác (có thâm số query nhưng không có giá trị)
                         var validParams = paramsDict.Where(p => !string.IsNullOrEmpty(p.Value))
@@ -336,12 +347,13 @@ namespace SQLiScanner.Modules
 
                         results.Add(new CrawlResult
                         {
-                            FullUrl = fullUrl,
+                            BaseUrl = fullUrl,
                             HttpMethod = "GET",
                             IsForm = false,
-                            Params = validParams
+                            Params = validParams,
+                            RawQueryString = rawQuery
                         });
-                        Console.WriteLine($"    [+] JS-GET endpoint: {fullUrl}");
+                        Console.WriteLine($"    [+] JS-GET endpoint: {cleanUrl} (Query: {rawQuery})");
                     }
                 }
             }
@@ -354,6 +366,9 @@ namespace SQLiScanner.Modules
                     string rawUrl = m.Groups[1].Value;
                     string? fullUrl = NormalizeUrl(rootUrl, currentUrl, rawUrl);
                     if (fullUrl == null) continue;
+
+                    string cleanUrl = fullUrl.Split('?')[0];
+                    string rawQuery = fullUrl.Contains("?") ? fullUrl.Split('?')[1] : string.Empty;
 
                     // Cố gắng tìm send() gần nhất để extract params
                     // VD: httpreq.send('id='+which) -> tìm thấy param "id"
@@ -374,7 +389,7 @@ namespace SQLiScanner.Modules
                     _scannedSignatures.Add(signature);
 
                     var validParams = paramsDict.Where(p => !string.IsNullOrEmpty(p.Value))
-                            .ToDictionary(p => p.Key, p => p.Value);
+                                                .ToDictionary(p => p.Key, p => p.Value);
 
                     if (validParams.Count == 0)
                     {
@@ -384,10 +399,11 @@ namespace SQLiScanner.Modules
 
                     results.Add(new CrawlResult
                     {
-                        FullUrl = fullUrl,
+                        BaseUrl = fullUrl,
                         HttpMethod = "POST",
                         IsForm = false,
-                        Params = validParams
+                        Params = validParams,
+                        RawQueryString = rawQuery
                     });
                     Console.WriteLine($"    [+] JS-POST endpoint: {fullUrl} (Params: {string.Join(", ", paramsDict.Keys)})");
                 }
@@ -397,7 +413,7 @@ namespace SQLiScanner.Modules
         private string GuessInputValue(HtmlNode inputNode, string inputName, string inputType)
         {
             // Nếu là thẻ <select>, cố gắng lấy giá trị của <option> đầu tiên
-            if (inputNode.Name.ToLower() == "select")
+            if (inputNode.Name.Equals("select", StringComparison.OrdinalIgnoreCase))
             {
                 var firstOption = inputNode.SelectSingleNode(".//option[@value]");
                 if (firstOption != null) return firstOption.GetAttributeValue("value", "1");

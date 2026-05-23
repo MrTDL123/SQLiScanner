@@ -9,15 +9,11 @@ namespace SQLiScanner.Models
     public class CrawlResult
     {
 
-        public string FullUrl { get; set; }
+        public string BaseUrl { get; set; }
         public string HttpMethod { get; set; }
         public bool IsForm { get; set; }
-        public Dictionary<string, string> Params { get; set; }
+        public Dictionary<string, string> Params { get; set; } = new();
 
-        public CrawlResult()
-        {
-            Params = new Dictionary<string, string>();
-
-        }
+        public string RawQueryString { get; set; } = string.Empty;
     }
 }
