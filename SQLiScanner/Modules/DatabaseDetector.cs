@@ -44,10 +44,23 @@ namespace SQLiScanner.Modules
             List<PayloadState> trackingList,
             ScanConfig config)
         {
+            var allParamNames = new List<string>(target.Params.Keys);
+            if (!string.IsNullOrEmpty(target.RawQueryString))
+            {
+                var queryQueryParams = System.Web.HttpUtility.ParseQueryString(target.RawQueryString);
+                foreach (string? key in queryQueryParams.AllKeys)
+                {
+                    if (key != null && !allParamNames.Contains(key))
+                    {
+                        allParamNames.Add(key);
+                    }
+                }
+            }
+
             Logger.Url(
-                target.FullUrl,
+                target.BaseUrl,
                 target.HttpMethod,
-                string.Join(", ", target.Params.Keys)
+                string.Join(", ", allParamNames)
             );
 
             List<Task> pendingAiTasks = new();
@@ -56,7 +69,7 @@ namespace SQLiScanner.Modules
             {
                 if (config.Token.IsCancellationRequested) return true;
 
-                if (config.ExitOnFirstHit && config.DetectionResults.Any(r => r.VulnerableURL == target.FullUrl))
+                if (config.ExitOnFirstHit && config.DetectionResults.Any(r => r.VulnerableURL == target.BaseUrl))
                     return true;
 
                 return false;
@@ -65,12 +78,15 @@ namespace SQLiScanner.Modules
             if (ShouldStopCurrentTarget())
                 return config.DetectionResults.ToList();
 
-            foreach (var param in target.Params)
+            foreach (string paramName in allParamNames)
             {
                 if (ShouldStopCurrentTarget()) break;
 
-                string paramName = param.Key;
-                string originalValue = param.Value;
+                // Lấy giá trị gốc an toàn: Ưu tiên trong Params, nếu không có thì bóc từ RawQueryString
+                string originalValue = target.Params.TryGetValue(paramName, out var bodyVal)
+                    ? bodyVal
+                    : (System.Web.HttpUtility.ParseQueryString(target.RawQueryString)[paramName] ?? "");
+                
                 Logger.Info($"THAM SỐ ĐƯỢC SỬ DỤNG ĐỂ TẤN CÔNG: {paramName}");
                 // Kiểm tra ngữ cảnh
                 HeuristicResult heuristicResult = await _contextAnalyzer.PerformHeuristicScanAsync(target, paramName);
@@ -87,6 +103,9 @@ namespace SQLiScanner.Modules
                     string suffix = boundary.Suffix;
                     Logger.Info($"\nXét Boundary: Prefix [{prefix}] | Suffix [{suffix}]");
 
+                    // CỜ KIỂM SOÁT NGẮT SỚM CHO THAM SỐ HIỆN TẠI
+                    bool isCurrentParamVulnerable = false;
+
                     var errorType = heuristicResult.ApplicablePayloads.Where(p => p.SType == 2).ToList();
                     if (errorType.Any())
                     {
@@ -98,19 +117,18 @@ namespace SQLiScanner.Modules
                         {
                             foreach (string payload in payloads.Payloads)
                             {
-                                localStates[stateIndex] = new PayloadState(target.FullUrl, paramName, payload);
-                                trackingList.Add(localStates[stateIndex]);
-                                stateIndex++;
+                                localStates[stateIndex++] = new PayloadState(target.BaseUrl, paramName, payload);
                             }
                         }
+                        foreach (var state in localStates) trackingList.Add(state);
 
                         stateIndex = 0;
                         foreach (PayloadType payloads in errorType)
                         {
-                            if (ShouldStopCurrentTarget()) break;
+                            if (ShouldStopCurrentTarget() || isCurrentParamVulnerable) break;
                             foreach (string payload in payloads.Payloads)
                             {
-                                if (ShouldStopCurrentTarget()) break;
+                                if (ShouldStopCurrentTarget() || isCurrentParamVulnerable) break;
 
                                 PayloadState currentState = localStates[stateIndex];
                                 currentState.UpdateStatus(ScanStatus.HeuristicScanning, "Testing Error-Based...");
@@ -122,10 +140,12 @@ namespace SQLiScanner.Modules
 
                                 if (isErrorBasedSuccess)
                                 {
-                                    currentState.UpdateStatus(ScanStatus.Vulnerable, $"Phát hiện {payloads.DBMS} là cơ sở dữ liệu");
+                                    isCurrentParamVulnerable = true;
+                                    currentState.UpdateStatus(ScanStatus.Vulnerable, $"Phát hiện {payloads.DBMS} (Error-based)");
                                     DetectionResult result = new DetectionResult
                                     {
-                                        VulnerableURL = target.FullUrl,
+                                        HttpMethod = target.HttpMethod,
+                                        VulnerableURL = target.BaseUrl,
                                         FoundContext = "ERROR-BASED",
                                         DatabaseType = GetDbTypeFromString(payloads.DBMS),
                                         VulnerableParam = paramName,
@@ -134,19 +154,19 @@ namespace SQLiScanner.Modules
                                     };
 
                                     Logger.Success($"PHÁT HIỆN {result.DatabaseType} THÔNG QUA THÔNG BÁO LỖI!");
-                                    Logger.Result(result);
-
                                     config.DetectionResults.Add(result);
+
                                     if (config.ExitOnFirstHit) break;
                                 }
                                 stateIndex++;
                             }
                         }
                         ClearUnusedStates(localStates);
-                        Logger.Warning("Không thể sử dụng Error-Based để xác định Database!");
                     }
 
                     // --- GIAI ĐOẠN 2: TÌM KIẾM BOOLEAN-BASED (SType == 1) ---
+                    if (isCurrentParamVulnerable) continue;
+
                     List<PayloadType> booleanType = heuristicResult.ApplicablePayloads.Where(p => p.SType == 1).ToList();
                     if (booleanType.Any())
                     {
@@ -160,19 +180,19 @@ namespace SQLiScanner.Modules
                         {
                             foreach (string payload in payloads.Payloads)
                             {
-                                localStates[stateIndex] = new PayloadState(target.FullUrl, paramName, payload);
-                                trackingList.Add(localStates[stateIndex]);
-                                stateIndex++;
+                                localStates[stateIndex++] = new PayloadState(target.BaseUrl, paramName, payload);
                             }
                         }
+                        
+                        foreach (PayloadState state in localStates) trackingList.Add(state);
 
                         stateIndex = 0;
                         foreach (PayloadType payloads in booleanType)
                         {
-                            if (ShouldStopCurrentTarget()) break;
+                            if (ShouldStopCurrentTarget() || isCurrentParamVulnerable) break;
                             foreach (string payload in payloads.Payloads)
                             {
-                                if (ShouldStopCurrentTarget()) break;
+                                if (ShouldStopCurrentTarget() || isCurrentParamVulnerable) break;
 
                                 PayloadState currentState = localStates[stateIndex];
                                 currentState.UpdateStatus(ScanStatus.HeuristicScanning, "Testing Boolean...");
@@ -184,11 +204,13 @@ namespace SQLiScanner.Modules
 
                                 if (isBooleanSuccess)
                                 {
-                                    currentState.UpdateStatus(ScanStatus.Vulnerable, $"Phát hiện {payloads.DBMS} là cơ sở dữ liệu của đối tượng");
+                                    isCurrentParamVulnerable = true;
+                                    currentState.UpdateStatus(ScanStatus.Vulnerable, $"Phát hiện {payloads.DBMS} (Boolean-based)");
 
                                     DetectionResult result = new DetectionResult
                                     {
-                                        VulnerableURL = target.FullUrl,
+                                        HttpMethod = target.HttpMethod,
+                                        VulnerableURL = target.BaseUrl,
                                         FoundContext = "BOOLEAN-BASED",
                                         DatabaseType = GetDbTypeFromString(payloads.DBMS),
                                         VulnerableParam = paramName,
@@ -196,8 +218,6 @@ namespace SQLiScanner.Modules
                                         WorkingSuffix = suffix
                                     };
                                     Logger.Success($"PHÁT HIỆN {result.DatabaseType} THÔNG QUA Boolean-Based!");
-                                    Logger.Result(result);
-
                                     config.DetectionResults.Add(result);
 
                                     if (config.ExitOnFirstHit) break;
@@ -209,6 +229,7 @@ namespace SQLiScanner.Modules
                     }
 
                     // --- GIAI ĐOẠN 3: TÌM KIẾM TIME-BASED (SType == 5) ---
+                    if (isCurrentParamVulnerable) continue;
                     var timeType = heuristicResult.ApplicablePayloads.Where(p => p.SType == 5).ToList();
                     if (timeType.Any())  
                     {
@@ -221,19 +242,19 @@ namespace SQLiScanner.Modules
                         {
                             foreach (string payload in payloads.Payloads)
                             {
-                                localStates[stateIndex] = new PayloadState(target.FullUrl, paramName, payload);
-                                trackingList.Add(localStates[stateIndex]);
-                                stateIndex++;
+                                localStates[stateIndex++] = new PayloadState(target.BaseUrl, paramName, payload);
                             }
                         }
-
+                        
+                        foreach (var state in localStates) trackingList.Add(state);
+                        
                         stateIndex = 0;
                         foreach (PayloadType payloads in timeType)
                         {
-                            if (ShouldStopCurrentTarget()) break;
+                            if (ShouldStopCurrentTarget() || isCurrentParamVulnerable) break;
                             foreach (string payload in payloads.Payloads)
                             {
-                                if (ShouldStopCurrentTarget()) break;
+                                if (ShouldStopCurrentTarget() || isCurrentParamVulnerable) break;
                                 PayloadState currentState = localStates[stateIndex];
                                 currentState.UpdateStatus(ScanStatus.HeuristicScanning, "Testing Time-Based...");
 
@@ -243,18 +264,19 @@ namespace SQLiScanner.Modules
 
                                 if (isTimeBasedSuccess)
                                 {
-                                    currentState.UpdateStatus(ScanStatus.Vulnerable, $"Phát hiện {payloads.DBMS} là cơ sở dữ liệu");
+                                    isCurrentParamVulnerable = true;
+                                    currentState.UpdateStatus(ScanStatus.Vulnerable, $"Phát hiện {payloads.DBMS} (Time-based)");
                                     DetectionResult result = new DetectionResult
                                     {
-                                        VulnerableURL = target.FullUrl,
+                                        HttpMethod = target.HttpMethod,
+                                        VulnerableURL = target.BaseUrl,
                                         FoundContext = "TIME-BASED",
                                         DatabaseType = GetDbTypeFromString(payloads.DBMS),
                                         VulnerableParam = paramName,
                                         WorkingPrefix = prefix,
                                         WorkingSuffix = suffix
                                     };
-                                    Logger.Success($"PHÁT HIỆN {result.DatabaseType} THÔNG QUA TIME-BASED BLIND (Độ trễ thời gian)!");
-                                    Logger.Result(result);
+                                    Logger.Success($"PHÁT HIỆN {result.DatabaseType} THÔNG QUA TIME-BASED!");
                                     config.DetectionResults.Add(result);
 
                                     if (config.ExitOnFirstHit) break;
@@ -263,14 +285,13 @@ namespace SQLiScanner.Modules
                             }
                         }
                         ClearUnusedStates(localStates);
-                        Logger.Warning("Không thể sử dụng Time-Based để xác định Database!");
                     }
                 }
             }
 
             if (!config.Token.IsCancellationRequested && pendingAiTasks.Any())
             {
-                if (!config.ExitOnFirstHit || !config.DetectionResults.Any(r => r.VulnerableURL == target.FullUrl))
+                if (!config.ExitOnFirstHit || !config.DetectionResults.Any(r => r.VulnerableURL == target.BaseUrl))
                 {
                     Logger.Process($"Đang chờ {pendingAiTasks.Count} payload vùng xám được AI xử lý nốt...");
                     await Task.WhenAll(pendingAiTasks);
@@ -306,34 +327,44 @@ namespace SQLiScanner.Modules
                 return (false, sw.ElapsedMilliseconds, 0);
             }
         }
-        private async Task<(string? html, byte[]? bytes, int statusCode, string finalUrl)> SendRequestAsync(CrawlResult target, string injectKey, string injectValue)
+        private async Task<(string? html, byte[]? bytes, int statusCode, string finalUrl)> SendRequestAsync(
+            CrawlResult target, string injectKey, string injectValue)
         {
             try
             {
-                var checkParams = new Dictionary<string, string>(target.Params);
-                checkParams[injectKey] = injectValue;
-
                 var method = new System.Net.Http.HttpMethod(target.HttpMethod.ToUpper());
-
                 HttpRequestMessage request;
 
-                if (method == System.Net.Http.HttpMethod.Get)
+                var queryParams = System.Web.HttpUtility.ParseQueryString(target.RawQueryString);
+                var bodyParams = new Dictionary<string, string>(target.Params);
+
+                // Kiểm tra liệu có phải đang chèn payload vào tham số query hay đang chèn vào Form
+                bool isQueryParam = target.RawQueryString.Contains($"{injectKey}=") || !target.Params.ContainsKey(injectKey);
+
+                if (isQueryParam)
                 {
-                    var uriBuilder = new UriBuilder(target.FullUrl);
-                    var query = System.Web.HttpUtility.ParseQueryString(string.Empty);
-                    foreach (var p in checkParams) query[p.Key] = p.Value;
-                    uriBuilder.Query = query.ToString();
-
-                    request = new HttpRequestMessage(method, uriBuilder.ToString());
-                    Logger.Request(method.ToString(), request.RequestUri.ToString());
-
+                    queryParams[injectKey] = injectValue;
+                    bodyParams.Remove(injectKey);
                 }
-                else // POST
+                else
                 {
-                    request = new HttpRequestMessage(method, target.FullUrl);
-                    request.Content = new FormUrlEncodedContent(checkParams);
-                    Logger.Process($"[>] Đang gửi Form cùng các truòng dữ liệu đính kèm...");
-                    Logger.Request(method.ToString(), string.Join(", ", checkParams.Select(kv => $"{kv.Key} = [{kv.Value}]")));
+                    bodyParams[injectKey] = injectValue;
+                }
+
+                var uriBuilder = new UriBuilder(target.BaseUrl);
+                uriBuilder.Query = queryParams.ToString();
+
+                request = new HttpRequestMessage(method, uriBuilder.ToString());
+
+
+                if (method == System.Net.Http.HttpMethod.Post)
+                {
+                    request.Content = new FormUrlEncodedContent(bodyParams);
+                    Logger.Request(method.ToString(), $"URL Query: {uriBuilder.Query} | Body: {string.Join(", ", bodyParams.Select(kv => $"{kv.Key}=[{kv.Value}]"))}");
+                }
+                else
+                {
+                    Logger.Request(method.ToString(), uriBuilder.ToString());
                 }
 
                 if (!request.Headers.Contains("User-Agent"))
@@ -399,16 +430,9 @@ namespace SQLiScanner.Modules
         }
 
         private async Task<bool> CheckBooleanBasedPayload(
-            CrawlResult target,
-            string dbms,
-            string paramName,
-            string originalValue,
-            string prefix,
-            string suffix,
-            string payload,
-            PayloadState currentState,
-            ScanConfig config,
-            List<Task> pendingAiTasks)
+            CrawlResult target, string dbms, string paramName, string originalValue,
+            string prefix, string suffix, string payload, PayloadState currentState,
+            ScanConfig config, List<Task> pendingAiTasks)
         {
             // CHUẨN BỊ PAYLOAD
             string fullPayloadTrue = $"{originalValue}{prefix} {payload} {suffix} ";
@@ -460,10 +484,18 @@ namespace SQLiScanner.Modules
             {
                 Logger.Process("Phát hiện vùng xám. Đang kích hoạt AI để thẩm định ngữ cảnh");
 
+                var uriBuilder = new UriBuilder(target.BaseUrl);
+                if (!string.IsNullOrEmpty(target.RawQueryString))
+                {
+                    uriBuilder.Query = target.RawQueryString;
+                }
+                string fullOriginalUrl = uriBuilder.ToString();
+
                 AiContextRequestPayload? conTextForAI = await GetContextForAI(
                     htmlTrue!, trueFinalUrl!,
-                    htmlFalse!, falseFinalUrl, 
-                    target.FullUrl);
+                    htmlFalse!, falseFinalUrl,
+                    fullOriginalUrl);
+
                 if (conTextForAI != null)
                 {
                     Task aiTask = _aiConcurrencyEngine.EnqueueAnalysisAsync(
@@ -475,7 +507,8 @@ namespace SQLiScanner.Modules
                                 currentState.UpdateStatus(ScanStatus.Vulnerable, $"AI: {response.Reason}");
                                 DetectionResult result = new DetectionResult
                                 {
-                                    VulnerableURL = target.FullUrl,
+                                    HttpMethod = target.HttpMethod,
+                                    VulnerableURL = target.BaseUrl,
                                     FoundContext = "BOOLEAN-BASED",
                                     DatabaseType = GetDbTypeFromString(dbms),
                                     VulnerableParam = paramName,

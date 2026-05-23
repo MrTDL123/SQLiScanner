@@ -23,7 +23,11 @@ namespace SQLiScanner.Modules
             PayloadState trackingState)
         {
             trackingState.UpdateStatus(ScanStatus.CheckingColumnCount, "Đang dò số cột bằng ORDER BY...");
-            string originalValue = target.Params[detectedData.VulnerableParam];
+
+            string originalValue = target.Params.TryGetValue(detectedData.VulnerableParam, out var bodyVal)
+                ? bodyVal
+                : (System.Web.HttpUtility.ParseQueryString(target.RawQueryString)[detectedData.VulnerableParam] ?? "");
+
             int baseLength = await GetResponseLengthAsync(target, detectedData.VulnerableParam, originalValue);
 
             if (baseLength <= 0) return -1;
@@ -58,7 +62,10 @@ namespace SQLiScanner.Modules
             trackingState.UpdateStatus(ScanStatus.ExploitingData, $"Đang tìm cột Text trong {colCount} cột...");
             List<int> visibleCols = new List<int>();
             string fromTable = detectedData.DatabaseType == DatabaseType.Oracle ? " FROM DUAL" : "";
-            string originalValue = target.Params[detectedData.VulnerableParam];
+
+            string originalValue = target.Params.TryGetValue(detectedData.VulnerableParam, out var bodyVal)
+                ? bodyVal
+                : (System.Web.HttpUtility.ParseQueryString(target.RawQueryString)[detectedData.VulnerableParam] ?? "");
 
             string[] payloadParts = new string[colCount];
             for (int i = 0; i < colCount; i++)
@@ -99,32 +106,38 @@ namespace SQLiScanner.Modules
             catch { return -1; }
         }
 
-        private async Task<byte[]?> SendPayloadGetBytesAsync(CrawlResult target, string paramKey, string payloadValue)
+        private async Task<byte[]?> SendPayloadGetBytesAsync(CrawlResult target, string injectKey, string injectValue)
         {
             try
             {
-                var finalParams = new Dictionary<string, string>(target.Params);
-                finalParams[paramKey] = payloadValue;
-
-
                 var method = new HttpMethod(target.HttpMethod.ToUpper());
-
                 HttpRequestMessage request;
 
-                if (method == HttpMethod.Get)
-                {
-                    var uriBuilder = new UriBuilder(target.FullUrl);
-                    var query = System.Web.HttpUtility.ParseQueryString(string.Empty);
-                    foreach (var p in finalParams) query[p.Key] = p.Value;
-                    uriBuilder.Query = query.ToString();
+                var queryParams = System.Web.HttpUtility.ParseQueryString(target.RawQueryString);
+                var bodyParams = new Dictionary<string, string>(target.Params);
 
-                    request = new HttpRequestMessage(method, uriBuilder.ToString());
+                bool isQueryParam = target.RawQueryString.Contains($"{injectKey}=") || !target.Params.ContainsKey(injectKey);
+
+                if (isQueryParam)
+                {
+                    queryParams[injectKey] = injectValue;
+                    bodyParams.Remove(injectKey);
                 }
                 else
                 {
-                    request = new HttpRequestMessage(method, target.FullUrl);
-                    request.Content = new FormUrlEncodedContent(finalParams);
+                    bodyParams[injectKey] = injectValue; 
                 }
+
+                var uriBuilder = new UriBuilder(target.BaseUrl);
+                uriBuilder.Query = queryParams.ToString();
+
+                request = new HttpRequestMessage(method, uriBuilder.ToString());
+
+                if (method == HttpMethod.Post)
+                {
+                    request.Content = new FormUrlEncodedContent(bodyParams);
+                }
+
 
                 if (!request.Headers.Contains("User-Agent"))
                 {

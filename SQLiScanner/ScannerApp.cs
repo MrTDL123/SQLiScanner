@@ -59,26 +59,28 @@ namespace SQLiScanner
             {
                 new()
                 {
-                    FullUrl = "http://testasp.vulnweb.com/Login.asp?RetURL=%2FDefault%2Easp%3F",
+                    BaseUrl = "http://testasp.vulnweb.com/Login.asp",
                     HttpMethod = "POST",
                     IsForm = true,
                     Params = new()
                     {
                         { "tfUName", "admin" },
                         { "tfUPass", "Admin@123"}
-                    }
+                    },
+                    RawQueryString = "RetURL=%2FDefault.asp%3F"
                 },
 
                 new()
                 {
-                    FullUrl = "http://testasp.vulnweb.com/showforum.asp?id=0",
+                    BaseUrl = "http://testasp.vulnweb.com/showforum.asp",
                     HttpMethod = "GET",
                     IsForm = false,
                     Params = new()
                     {
                         { "id", "0" }
-                    }
-                }
+                    },
+                    RawQueryString = "id=0"
+                },
             };
 
             // Bắt đầu cho chạy chờ đọc request từ luồng chính nếu cần AI phân tích
@@ -88,12 +90,15 @@ namespace SQLiScanner
 
             await RenderLiveScanTableAsync(sharedTrackingStates, async () =>
             {
-                foreach (var target in targetsDemo)
+                foreach (var target in targets)
                 {
                     if (scanConfig.Token.IsCancellationRequested) break;
                     await _dbDetector.DetectAsync(target, sharedTrackingStates, scanConfig);
 
-                    List<DetectionResult> targetResults = scanConfig.DetectionResults.Where(r => r.VulnerableURL == target.FullUrl && !r.IsExpointable).ToList();
+                    List<DetectionResult> targetResults = scanConfig.DetectionResults
+                        .Where(r => r.VulnerableURL == target.BaseUrl
+                                    && r.HttpMethod == target.HttpMethod
+                                    && !r.IsExpointable).ToList();
                     foreach (var result in targetResults)
                     {
                         if (scanConfig.Token.IsCancellationRequested) break;

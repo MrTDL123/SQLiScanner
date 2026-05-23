@@ -49,12 +49,18 @@ namespace SQLiScanner.API.Services
                 catch (Exception fallbackEx)
                 {
                     // Nếu cả dự phòng cũng chết thì coi như trả reponse False
-                    return HandleApiError(fallbackEx, _fallbackModel);
+                    var actualFallbackEx = fallbackEx is AggregateException agg 
+                        ? agg.Flatten().InnerException ?? agg 
+                        : fallbackEx;
+                    return HandleApiError(actualFallbackEx, _fallbackModel);
                 }
             }
             catch (Exception ex)
             {
-                return HandleApiError(ex, _primaryModel);
+                var actualEx = ex is AggregateException agg 
+                    ? agg.Flatten().InnerException ?? agg 
+                    : ex;
+                return HandleApiError(actualEx, _primaryModel);
             }
         }
 
@@ -68,8 +74,8 @@ namespace SQLiScanner.API.Services
                     - Page Title: {payload.PageTitle}
                     
                     DẤU HIỆU ĐỊNH TUYẾN (CỰC KỲ QUAN TRỌNG CHO AUTH BYPASS):
-                    - URL chèn payload luôn đúng: {payload.TrueUrl}
-                    - URL chèn payload luôn sai: {payload.FalseUrl}
+                    - URL sau khi chèn payload luôn đúng: {payload.TrueUrl}
+                    - URL sau khi chèn payload luôn sai: {payload.FalseUrl}
                     (*) CHÚ Ý: Nếu URL sau khi chèn bị thay đổi (Redirect sang trang quản trị, dashboard, index, v.v.) trong khi URL ban đầu là trang Login/Xác thực, đây là DẤU HIỆU MẠNH của lỗi Authentication Bypass.
 
                     BỐI CẢNH HTML TẠI KHU VỰC THAY ĐỔI:
@@ -147,21 +153,54 @@ namespace SQLiScanner.API.Services
             if (ex is BrokenCircuitException)
                 return new AiContextResponse(false, $"[CIRCUIT OPEN - {modelName}] API đang bị quá tải liên tục. Vui lòng thử lại sau.");
 
-            if (ex is Google.GenAI.ClientError clientEx)
-                return new AiContextResponse(false, $"Lỗi API Google ({modelName}): {clientEx.Message}");
+            if (ex.GetType().Name.Contains("Api") || ex.GetType().Name.Contains("Client"))
+                return new AiContextResponse(false, $"Lỗi API Google ({modelName}): {ex.Message}");
 
             return new AiContextResponse(false, $"Lỗi xử lý AI ({modelName}): {ex.Message}");
         }
 
         private bool ShouldTriggerFallback(Exception ex)
         {
+            if (ex is AggregateException aggregateException)
+            {
+                ex = aggregateException.Flatten().InnerException ?? aggregateException;
+            }
+
             if (ex is BrokenCircuitException) return true;
 
-            if (ex is Google.GenAI.ClientError clientError)
+            string msg = ex.Message.ToLower();
+            if (!string.IsNullOrEmpty(msg))
             {
-                return clientError.StatusCode == 429 || // Too Many Requests / Quota Exceeded
-                       clientError.StatusCode == 503 || // Service Unavailable
-                       clientError.StatusCode == 500;    // Internal Server Error
+                if (msg.Contains("429", StringComparison.OrdinalIgnoreCase) ||
+                    msg.Contains("503", StringComparison.OrdinalIgnoreCase) ||
+                    msg.Contains("500", StringComparison.OrdinalIgnoreCase) ||
+                    msg.Contains("high demand", StringComparison.OrdinalIgnoreCase) ||
+                    msg.Contains("too many requests", StringComparison.OrdinalIgnoreCase) ||
+                    msg.Contains("quota exceeded", StringComparison.OrdinalIgnoreCase))
+                {
+                    return true;
+                }
+            }
+
+            try
+            {
+                var statusCodeProp = ex.GetType().GetProperty("StatusCode");
+                if (statusCodeProp != null)
+                {
+                    var statusCodeVal = statusCodeProp.GetValue(ex);
+                    if (statusCodeVal != null)
+                    {
+                        int code = (int)statusCodeVal;
+                        return code == 429 || code == 503 || code == 500;
+                    }
+                }
+            }
+            catch { }
+
+            if (ex is HttpRequestException httpEx && httpEx.StatusCode.HasValue)
+            {
+                int code = (int)httpEx.StatusCode.Value;
+                return code == 429 || code == 503 || code == 500;
             }
             return false;
         }

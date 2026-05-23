@@ -10,6 +10,7 @@ namespace SQLiScanner.Models
     {
         public string VulnerableURL { get; set; }
         public string VulnerableParam { get; set; }
+        public string HttpMethod { get; set; }
         public string FoundContext { get; set; }
         public DatabaseType DatabaseType { get; set; } = DatabaseType.Unknow;
         public string WorkingPrefix { get; set; }
