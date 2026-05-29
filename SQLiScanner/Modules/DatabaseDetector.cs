@@ -105,7 +105,7 @@ namespace SQLiScanner.Modules
 
                     // CỜ KIỂM SOÁT NGẮT SỚM CHO THAM SỐ HIỆN TẠI
                     bool isCurrentParamVulnerable = false;
-
+                    // --- GIAI ĐOẠN 1: TÌM KIẾM ERROR-BASED ---
                     var errorType = heuristicResult.ApplicablePayloads.Where(p => p.SType == 2).ToList();
                     if (errorType.Any())
                     {
@@ -462,25 +462,25 @@ namespace SQLiScanner.Modules
             Logger.Response(statusFalse, bytesFalse.Length);
 
             //ĐẢM BẢO 2 PHẢN HỒI TỪ PAYLOAD KHÔNG GIỐNG NHAU
-            if (statusTrue != statusFalse)
-            {
-                Logger.Success($"Phát hiện khác biệt Status Code: True({statusTrue}) != False({statusFalse})");
-                return true;
-            }
+            //if (statusTrue != statusFalse)
+            //{
+            //    Logger.Success($"Phát hiện khác biệt Status Code: True({statusTrue}) != False({statusFalse})");
+            //    return true;
+            //}
 
             string textTrue = ExtractPlainText(htmlTrue!);
             string textFalse = ExtractPlainText(htmlFalse!);
             var similarityState = EvaluateSimilarity(textTrue, textFalse, bytesTrue.Length, bytesFalse.Length, 0.05, 0.20);
 
-            if (similarityState == SimilarityResult.Similar)
-            {
-                Logger.Warning($"Phát hiện sự trùng nhau ở dung lượng cả 2. True({bytesTrue.Length}) ~ False({bytesFalse.Length})");
-                currentState.UpdateStatus(ScanStatus.Safe, "Payload không có tác dụng");
-                return false;
-            }
+            //if (similarityState == SimilarityResult.Similar)
+            //{
+            //    Logger.Warning($"Phát hiện sự trùng nhau ở dung lượng cả 2. True({bytesTrue.Length}) ~ False({bytesFalse.Length})");
+            //    currentState.UpdateStatus(ScanStatus.Safe, "Payload không có tác dụng");
+            //    return false;
+            //}
 
             //BÁO CÁO PHÁT HIỆN TRƯỜNG HỢP ĐẶC BIỆT KHI MÃ PHẢN HỒI CẢ 2 GIỐNG NHAU NHƯNG DUNG LƯỢNG CẢ 2 LẠI KHÁC.
-            if (/*IsTesting || */similarityState == SimilarityResult.GreyZone)
+            if (IsTesting || similarityState == SimilarityResult.GreyZone)
             {
                 Logger.Process("Phát hiện vùng xám. Đang kích hoạt AI để thẩm định ngữ cảnh");
 
@@ -726,20 +726,20 @@ namespace SQLiScanner.Modules
         {
             var parser = new HtmlParser();
 
-            var documentBaseTask = parser.ParseDocumentAsync(trueHtml);
+            var documentTrueTask = parser.ParseDocumentAsync(trueHtml);
             var documentFalseTask = parser.ParseDocumentAsync(falseHtml);
 
-            await Task.WhenAll(documentBaseTask, documentFalseTask);
-            var documentBase = documentBaseTask.Result;
+            await Task.WhenAll(documentTrueTask, documentFalseTask);
+            var documentTrue = documentTrueTask.Result;
             var documentFalse = documentFalseTask.Result;
 
-            string baseFullText = documentBase.DocumentElement?.TextContent ?? "";
+            string trueFullText = documentTrue.DocumentElement?.TextContent ?? "";
 
             var diffElements = documentFalse.All
                 .Where(e => e.LocalName != "script"
                          && e.LocalName != "style"
                          && !string.IsNullOrWhiteSpace(e.TextContent))
-                .Where(e => !baseFullText.Contains(e.TextContent.Trim()))
+                .Where(e => !trueFullText.Contains(e.TextContent.Trim()))
                 .ToList();
 
             
@@ -758,13 +758,13 @@ namespace SQLiScanner.Modules
             string cssPath = BuildCssPath(changedElementFalse);
             string pageTitle = documentFalse.Title ?? "Không có Title";
 
-            // Tìm context chứa DiffText ở html trước khi chèn payload dựa vào thông tin có được từ cssPath
+            // Tìm context chứa DiffText ở html chèn payload True dựa vào thông tin có được từ cssPath
             IElement? matchedBaseElement = null;
             var currentSearchNode = changedElementFalse.ParentElement;
             while (currentSearchNode != null && currentSearchNode.LocalName != "html")
             {
                 string currentPath = BuildCssPath(currentSearchNode);
-                matchedBaseElement = documentBase.QuerySelector(currentPath);
+                matchedBaseElement = documentTrue.QuerySelector(currentPath);
 
                 // Tìm thấy "điểm neo" thành công
                 if (matchedBaseElement != null) break;

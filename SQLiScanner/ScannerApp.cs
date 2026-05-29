@@ -10,7 +10,6 @@ using SQLiScanner.Models.Enums;
 
 namespace SQLiScanner
 {
-
     public class ScannerApp
     {
         private readonly Crawler _crawler;
@@ -82,7 +81,7 @@ namespace SQLiScanner
                     RawQueryString = "id=0"
                 },
             };
-
+            Console.WriteLine();
             // Bắt đầu cho chạy chờ đọc request từ luồng chính nếu cần AI phân tích
             _aiEngine.StartWorkers();
 
@@ -90,7 +89,7 @@ namespace SQLiScanner
 
             await RenderLiveScanTableAsync(sharedTrackingStates, async () =>
             {
-                foreach (var target in targets)
+                foreach (var target in targetsDemo)
                 {
                     if (scanConfig.Token.IsCancellationRequested) break;
                     await _dbDetector.DetectAsync(target, sharedTrackingStates, scanConfig);
@@ -157,6 +156,7 @@ namespace SQLiScanner
             Console.ReadLine();
         }
 
+        // THIẾT LẬP GIAO DIỆN BẢNG
         private async Task RenderLiveScanTableAsync(List<PayloadState> trackingList, Func<Task> scanLogic)
         {
             var table = new Table().Border(TableBorder.Rounded).Expand();
