@@ -188,6 +188,7 @@ namespace SQLiScanner.Utility
                         Console.ForegroundColor = ConsoleColor.White;
                         Console.WriteLine($"  - URL Vulnerable : {result.VulnerableURL}");
                         Console.WriteLine($"  - Parameter      : {result.VulnerableParam}");
+                        Console.WriteLine($"  - HttpMethod     : {result.HttpMethod}");
                         Console.WriteLine($"  - Database Type  : {result.DatabaseType}");
                         Console.WriteLine($"  - Context Name   : {result.FoundContext}");
 
@@ -195,8 +196,8 @@ namespace SQLiScanner.Utility
                         Console.WriteLine($"  - Working Prefix : [{result.WorkingPrefix}]");
                         Console.WriteLine($"  - Working Suffix : [{result.WorkingSuffix}]");
 
-                        Console.ForegroundColor = result.IsExpointable ? ConsoleColor.Red : ConsoleColor.DarkGray;
-                        Console.WriteLine($"  - Exploitable    : {(result.IsExpointable ? "YES (Có thể khai thác sâu)" : "NO (Chỉ phát hiện)")}");
+                        Console.ForegroundColor = result.IsExploitable ? ConsoleColor.Red : ConsoleColor.DarkGray;
+                        Console.WriteLine($"  - Exploitable    : {(result.IsExploitable ? "YES (Có thể khai thác sâu)" : "NO (Chỉ phát hiện)")}");
 
                         if (!string.IsNullOrEmpty(result.ErrorMessage))
                         {

@@ -1,4 +1,5 @@
-﻿using AngleSharp.Dom;
+﻿using AngleSharp;
+using AngleSharp.Dom;
 using AngleSharp.Html.Parser;
 using AngleSharp.Io;
 using DataSchema;
@@ -11,6 +12,7 @@ using System.Net;
 using System.Text;
 using System.Net.Http;
 using System.Text.RegularExpressions;
+using SQLiScanner.Utilities;
 namespace SQLiScanner.Modules
 {
 
@@ -39,7 +41,7 @@ namespace SQLiScanner.Modules
             _aiConcurrencyEngine = aiConcurrencyEngine;
         }
 
-        public async Task<List<DetectionResult>> DetectAsync(
+        public async Task DetectAsync(
             CrawlResult target,
             List<PayloadState> trackingList,
             ScanConfig config)
@@ -69,14 +71,14 @@ namespace SQLiScanner.Modules
             {
                 if (config.Token.IsCancellationRequested) return true;
 
-                if (config.ExitOnFirstHit && config.DetectionResults.Any(r => r.VulnerableURL == target.BaseUrl))
+                if (config.ExitOnFirstHit && config.DetectionResults.Any(r => r.VulnerableURL == target.FullUrl && r.HttpMethod == target.HttpMethod))
                     return true;
 
                 return false;
             }
 
             if (ShouldStopCurrentTarget())
-                return config.DetectionResults.ToList();
+                return;
 
             foreach (string paramName in allParamNames)
             {
@@ -86,12 +88,41 @@ namespace SQLiScanner.Modules
                 string originalValue = target.Params.TryGetValue(paramName, out var bodyVal)
                     ? bodyVal
                     : (System.Web.HttpUtility.ParseQueryString(target.RawQueryString)[paramName] ?? "");
-                
+
                 Logger.Info($"THAM SỐ ĐƯỢC SỬ DỤNG ĐỂ TẤN CÔNG: {paramName}");
                 // Kiểm tra ngữ cảnh
-                HeuristicResult heuristicResult = await _contextAnalyzer.PerformHeuristicScanAsync(target, paramName);
+                PayloadState heuristicState = new PayloadState(target.FullUrl, paramName, "[Đang lấy payload dựa vào ngữ cảnh]");
+                trackingList.Add(heuristicState);
+                if (heuristicState == null)
+                {
+                    heuristicState = new PayloadState(target.FullUrl, paramName, "Tạo đại diện cho trạng thái payload");
+                }
+
+                heuristicState.UpdateStatus(ScanStatus.HeuristicScanning, "Bắt đầu phân tích bối cảnh đầu vào...");
+                HeuristicResult heuristicResult = await _contextAnalyzer.PerformHeuristicScanAsync(target, paramName, heuristicState);
+
+                // Kiểm tra XSS
+                if (heuristicResult.IsReflected)
+                {
+                    Logger.Warning($"[+] DANGEROUS: Phát hiện lỗ hổng Reflected XSS tại tham số [{paramName}]!");
+                    heuristicState.UpdateStatus(ScanStatus.Vulnerable, $"Phát hiện rò rĩ dữ liệu (XSS) tại tham số [{paramName}]");
+                    DetectionResult xssResult = new DetectionResult
+                    {
+                        HttpMethod = target.HttpMethod,
+                        VulnerableURL = target.FullUrl,
+                        FoundContext = "XSS",                
+                        DatabaseType = DatabaseType.Unknow, 
+                        VulnerableParam = paramName,
+                        WorkingPrefix = string.Empty,
+                        WorkingSuffix = string.Empty
+                    };
+
+                    config.DetectionResults.Add(xssResult);
+                }
+
                 if (!heuristicResult.IsReadyForDetection) // Đảm bảo đã đầy đủ Boudary và Payload để test
                 {
+                    heuristicState.UpdateStatus(ScanStatus.Safe, "Bỏ qua: Không tìm thấy Boundary hoặc ngữ cảnh lỗi.");
                     Logger.Warning($"Bỏ qua tham số [{paramName}] vì không khóa được Boundary hợp lệ.");
                     continue;
                 }
@@ -117,7 +148,7 @@ namespace SQLiScanner.Modules
                         {
                             foreach (string payload in payloads.Payloads)
                             {
-                                localStates[stateIndex++] = new PayloadState(target.BaseUrl, paramName, payload);
+                                localStates[stateIndex++] = new PayloadState(target.FullUrl, paramName, payload);
                             }
                         }
                         foreach (var state in localStates) trackingList.Add(state);
@@ -135,7 +166,8 @@ namespace SQLiScanner.Modules
 
                                 bool isErrorBasedSuccess = await CheckErrorBasedPayload(
                                     target, paramName, originalValue,
-                                    prefix, suffix, payload, payloads.ErrorResponsePattern, currentState
+                                    prefix, suffix, payload, payloads.ErrorResponsePattern,
+                                    currentState, heuristicResult.IsReflected
                                 );
 
                                 if (isErrorBasedSuccess)
@@ -145,7 +177,7 @@ namespace SQLiScanner.Modules
                                     DetectionResult result = new DetectionResult
                                     {
                                         HttpMethod = target.HttpMethod,
-                                        VulnerableURL = target.BaseUrl,
+                                        VulnerableURL = target.FullUrl,
                                         FoundContext = "ERROR-BASED",
                                         DatabaseType = GetDbTypeFromString(payloads.DBMS),
                                         VulnerableParam = paramName,
@@ -180,10 +212,10 @@ namespace SQLiScanner.Modules
                         {
                             foreach (string payload in payloads.Payloads)
                             {
-                                localStates[stateIndex++] = new PayloadState(target.BaseUrl, paramName, payload);
+                                localStates[stateIndex++] = new PayloadState(target.FullUrl, paramName, payload);
                             }
                         }
-                        
+
                         foreach (PayloadState state in localStates) trackingList.Add(state);
 
                         stateIndex = 0;
@@ -198,9 +230,10 @@ namespace SQLiScanner.Modules
                                 currentState.UpdateStatus(ScanStatus.HeuristicScanning, "Testing Boolean...");
 
                                 bool isBooleanSuccess = await CheckBooleanBasedPayload(
-                                    target, payloads.DBMS, paramName, 
-                                    originalValue, prefix, suffix, payload, 
-                                    currentState, config, pendingAiTasks);
+                                    target, payloads.DBMS, paramName,
+                                    originalValue, prefix, suffix, payload,
+                                    currentState, config, pendingAiTasks,
+                                    heuristicResult.IsReflected);
 
                                 if (isBooleanSuccess)
                                 {
@@ -210,7 +243,7 @@ namespace SQLiScanner.Modules
                                     DetectionResult result = new DetectionResult
                                     {
                                         HttpMethod = target.HttpMethod,
-                                        VulnerableURL = target.BaseUrl,
+                                        VulnerableURL = target.FullUrl,
                                         FoundContext = "BOOLEAN-BASED",
                                         DatabaseType = GetDbTypeFromString(payloads.DBMS),
                                         VulnerableParam = paramName,
@@ -231,7 +264,7 @@ namespace SQLiScanner.Modules
                     // --- GIAI ĐOẠN 3: TÌM KIẾM TIME-BASED (SType == 5) ---
                     if (isCurrentParamVulnerable) continue;
                     var timeType = heuristicResult.ApplicablePayloads.Where(p => p.SType == 5).ToList();
-                    if (timeType.Any())  
+                    if (timeType.Any())
                     {
                         Logger.Phase($"TÌM KIẾM TIME-BASED VỚI PREFIX [{prefix}]");
 
@@ -242,12 +275,12 @@ namespace SQLiScanner.Modules
                         {
                             foreach (string payload in payloads.Payloads)
                             {
-                                localStates[stateIndex++] = new PayloadState(target.BaseUrl, paramName, payload);
+                                localStates[stateIndex++] = new PayloadState(target.FullUrl, paramName, payload);
                             }
                         }
-                        
+
                         foreach (var state in localStates) trackingList.Add(state);
-                        
+
                         stateIndex = 0;
                         foreach (PayloadType payloads in timeType)
                         {
@@ -269,7 +302,7 @@ namespace SQLiScanner.Modules
                                     DetectionResult result = new DetectionResult
                                     {
                                         HttpMethod = target.HttpMethod,
-                                        VulnerableURL = target.BaseUrl,
+                                        VulnerableURL = target.FullUrl,
                                         FoundContext = "TIME-BASED",
                                         DatabaseType = GetDbTypeFromString(payloads.DBMS),
                                         VulnerableParam = paramName,
@@ -291,14 +324,14 @@ namespace SQLiScanner.Modules
 
             if (!config.Token.IsCancellationRequested && pendingAiTasks.Any())
             {
-                if (!config.ExitOnFirstHit || !config.DetectionResults.Any(r => r.VulnerableURL == target.BaseUrl))
+                if (!config.ExitOnFirstHit || !config.DetectionResults.Any(r => r.VulnerableURL == target.FullUrl))
                 {
                     Logger.Process($"Đang chờ {pendingAiTasks.Count} payload vùng xám được AI xử lý nốt...");
                     await Task.WhenAll(pendingAiTasks);
                 }
             }
 
-            return config.DetectionResults.ToList();
+            return;
         }
 
         #region Các hàm phụ trợ
@@ -309,7 +342,7 @@ namespace SQLiScanner.Modules
             try
             {
                 sw.Start();
-                var (_, _, statusCode,_) = await SendRequestAsync(target, paramName, payloadValue);
+                var (_, _, statusCode, _) = await SendRequestAsync(target, paramName, payloadValue);
                 sw.Stop();
 
                 return (true, sw.ElapsedMilliseconds, statusCode);
@@ -376,14 +409,14 @@ namespace SQLiScanner.Modules
                 var bytes = await response.Content.ReadAsByteArrayAsync();
                 var charset = response.Content.Headers.ContentType?.CharSet;
                 var encoding = charset is not null ? Encoding.GetEncoding(charset) : Encoding.UTF8;
-                string finalUrl = response.RequestMessage.RequestUri.ToString();
+                string? finalUrl = response.RequestMessage.RequestUri.ToString();
 
                 return (encoding.GetString(bytes), bytes, (int)response.StatusCode, finalUrl);
             }
             catch (Exception ex)
             {
                 Logger.Error($"Gửi Request thất bại: {ex.Message}");
-                return (null, null, 0, null);
+                return (null!, null!, 0, null!);
             }
         }
 
@@ -395,7 +428,8 @@ namespace SQLiScanner.Modules
             string suffix,
             string payload,
             string errorResponseRegex,
-            PayloadState currentState
+            PayloadState currentState,
+            bool isReflected
         )
         {
             string injectedPayload = $"{originalValue}{prefix} {payload} {suffix} ";
@@ -407,6 +441,12 @@ namespace SQLiScanner.Modules
                 return false;
             }
 
+            // Lọc html trường hợp nhiễu dữ liệu khi payload trả về giao diện thay vì chạy về máy chủ
+            if (isReflected)
+            {
+                html = ReflectionDetector.RemovePayloadFromText(html, injectedPayload);
+            }
+
             if (!string.IsNullOrEmpty(errorResponseRegex))
             {
                 try
@@ -415,8 +455,20 @@ namespace SQLiScanner.Modules
                     if (match.Success)
                     {
                         string extractedData = match.Groups["result"].Value;
-                        Logger.Success($"[+] Error-Based thành công! Đã trích xuất được: {extractedData}");
-                        return true;
+                        extractedData = WebUtility.UrlDecode(extractedData);
+
+                        // Nếu nội dung thấy được chứa các câu query thì payload không hoạt động mà chỉ bị trả về
+                        if (extractedData.Contains("SELECT", StringComparison.OrdinalIgnoreCase) ||
+                            extractedData.Contains("qXXq", StringComparison.OrdinalIgnoreCase) ||
+                            extractedData.Contains("EXTRACTVALUE", StringComparison.OrdinalIgnoreCase))
+                        {
+                            Logger.Warning("Regex tóm nhầm dữ liệu Reflected (Bypass thành công bằng Oracle Validation).");
+                        }
+                        else
+                        {
+                            Logger.Success($"[+] Error-Based thành công! Đã trích xuất được data thật: {extractedData}");
+                            return true;
+                        }
                     }
                 }
                 catch (Exception ex)
@@ -432,7 +484,7 @@ namespace SQLiScanner.Modules
         private async Task<bool> CheckBooleanBasedPayload(
             CrawlResult target, string dbms, string paramName, string originalValue,
             string prefix, string suffix, string payload, PayloadState currentState,
-            ScanConfig config, List<Task> pendingAiTasks)
+            ScanConfig config, List<Task> pendingAiTasks, bool isReflected)
         {
             // CHUẨN BỊ PAYLOAD
             string fullPayloadTrue = $"{originalValue}{prefix} {payload} {suffix} ";
@@ -462,25 +514,40 @@ namespace SQLiScanner.Modules
             Logger.Response(statusFalse, bytesFalse.Length);
 
             //ĐẢM BẢO 2 PHẢN HỒI TỪ PAYLOAD KHÔNG GIỐNG NHAU
-            //if (statusTrue != statusFalse)
-            //{
-            //    Logger.Success($"Phát hiện khác biệt Status Code: True({statusTrue}) != False({statusFalse})");
-            //    return true;
-            //}
+            if (statusTrue != statusFalse)
+            {
+                Logger.Success($"Phát hiện khác biệt Status Code: True({statusTrue}) != False({statusFalse})");
+                return true;
+            }
+
+            if (isReflected)
+            {
+                var parser = new HtmlParser();
+
+                // Gọt sạch HTML True
+                var docTrue = parser.ParseDocument(htmlTrue!);
+                DomSanitizer.CleanReflectedNodes(docTrue, fullPayloadTrue);
+                htmlTrue = docTrue.ToHtml();
+
+                // Gọt sạch HTML False
+                var docFalse = parser.ParseDocument(htmlFalse!);
+                DomSanitizer.CleanReflectedNodes(docFalse, fullPayloadFalse);
+                htmlFalse = docFalse.ToHtml();
+            }
 
             string textTrue = ExtractPlainText(htmlTrue!);
             string textFalse = ExtractPlainText(htmlFalse!);
             var similarityState = EvaluateSimilarity(textTrue, textFalse, bytesTrue.Length, bytesFalse.Length, 0.05, 0.20);
 
-            //if (similarityState == SimilarityResult.Similar)
-            //{
-            //    Logger.Warning($"Phát hiện sự trùng nhau ở dung lượng cả 2. True({bytesTrue.Length}) ~ False({bytesFalse.Length})");
-            //    currentState.UpdateStatus(ScanStatus.Safe, "Payload không có tác dụng");
-            //    return false;
-            //}
+            if (similarityState == SimilarityResult.Similar)
+            {
+                Logger.Warning($"Phát hiện sự trùng nhau ở dung lượng cả 2. True({bytesTrue.Length}) ~ False({bytesFalse.Length})");
+                currentState.UpdateStatus(ScanStatus.Safe, "Payload không có tác dụng");
+                return false;
+            }
 
             //BÁO CÁO PHÁT HIỆN TRƯỜNG HỢP ĐẶC BIỆT KHI MÃ PHẢN HỒI CẢ 2 GIỐNG NHAU NHƯNG DUNG LƯỢNG CẢ 2 LẠI KHÁC.
-            if (IsTesting || similarityState == SimilarityResult.GreyZone)
+            if (/*IsTesting || */similarityState == SimilarityResult.GreyZone)
             {
                 Logger.Process("Phát hiện vùng xám. Đang kích hoạt AI để thẩm định ngữ cảnh");
 
@@ -508,7 +575,7 @@ namespace SQLiScanner.Modules
                                 DetectionResult result = new DetectionResult
                                 {
                                     HttpMethod = target.HttpMethod,
-                                    VulnerableURL = target.BaseUrl,
+                                    VulnerableURL = target.FullUrl,
                                     FoundContext = "BOOLEAN-BASED",
                                     DatabaseType = GetDbTypeFromString(dbms),
                                     VulnerableParam = paramName,
@@ -529,7 +596,7 @@ namespace SQLiScanner.Modules
                     currentState.UpdateStatus(ScanStatus.Safe, $"Không tìm thấy dữ liệu để gửi AI");
 
                 // Ngay lập tức trả về false để luồng chính phân tích Heuristic
-                return false;                
+                return false;
             }
 
             Logger.Process("Đang xác định kịch bản phát hiện...");
@@ -717,8 +784,8 @@ namespace SQLiScanner.Modules
 
             return (double)intersectionCount / unionCount;
         }
-        
-        
+
+
         private async Task<AiContextRequestPayload?> GetContextForAI(
             string trueHtml, string trueFinalUrl,
             string falseHtml, string falseFinalUrl,
@@ -742,7 +809,7 @@ namespace SQLiScanner.Modules
                 .Where(e => !trueFullText.Contains(e.TextContent.Trim()))
                 .ToList();
 
-            
+
 
             // Vì thẻ cha cũng được tính là chứa được nội dung diffText 
             // nên ta đi tìm thẻ chứa nội dung diffText ít thẻ con nhất
