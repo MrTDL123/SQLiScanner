@@ -59,6 +59,29 @@ namespace SQLiScanner
                 new()
                 {
                     BaseUrl = "http://testasp.vulnweb.com/Login.asp",
+                    HttpMethod = "GET",
+                    IsForm = false,
+                    Params = new()
+                    {
+                        { "RetURL", "/Default.asp?" }
+                    },
+                    RawQueryString = "RetURL=%2FDefault.asp%3F"
+                },
+
+                new()
+                {
+                    BaseUrl = "http://testasp.vulnweb.com/Register.asp",
+                    HttpMethod = "GET",
+                    IsForm = false,
+                    Params = new()
+                    {
+                        { "RetURL", "/Default.asp?" }
+                    },
+                    RawQueryString = "RetURL=%2FDefault.asp%3F"
+                },
+                new()
+                {
+                    BaseUrl = "http://testasp.vulnweb.com/Login.asp",
                     HttpMethod = "POST",
                     IsForm = true,
                     Params = new()
@@ -89,15 +112,15 @@ namespace SQLiScanner
 
             await RenderLiveScanTableAsync(sharedTrackingStates, async () =>
             {
-                foreach (var target in targetsDemo)
+                foreach (var target in targets)
                 {
                     if (scanConfig.Token.IsCancellationRequested) break;
                     await _dbDetector.DetectAsync(target, sharedTrackingStates, scanConfig);
 
                     List<DetectionResult> targetResults = scanConfig.DetectionResults
-                        .Where(r => r.VulnerableURL == target.BaseUrl
+                        .Where(r => r.VulnerableURL == target.FullUrl
                                     && r.HttpMethod == target.HttpMethod
-                                    && !r.IsExpointable).ToList();
+                                    && !r.IsExploitable).ToList();
                     foreach (var result in targetResults)
                     {
                         if (scanConfig.Token.IsCancellationRequested) break;
@@ -116,7 +139,7 @@ namespace SQLiScanner
                             {
                                 string colInfo = string.Join(", ", visibleCols);
                                 vulnerableState.UpdateStatus(ScanStatus.Dangerous, $"[Khai thác thành công] Cột text: {colInfo} / Tổng: {colCount}");
-                                result.IsExpointable = true;
+                                result.IsExploitable = true;
                             }
                             else
                             {
@@ -207,6 +230,7 @@ namespace SQLiScanner
                 string statusMarkup = state.Status switch
                 {
                     ScanStatus.HeuristicScanning => $"[yellow]{spinner} Scanning[/]",
+                    ScanStatus.HeuristicDone => "[green]Done Scanning[/]",
                     ScanStatus.AiAnalyzing => $"[blue]{spinner} AI Analyzing[/]",
                     ScanStatus.Vulnerable => "[red blink bold]VULNERABLE[/]",
                     ScanStatus.Safe => "[green]Safe[/]",

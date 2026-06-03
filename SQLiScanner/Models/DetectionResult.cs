@@ -16,11 +16,16 @@ namespace SQLiScanner.Models
         public string WorkingPrefix { get; set; }
         public string WorkingSuffix { get; set; }
         public string ErrorMessage { get; set; }
-        public bool IsExpointable { get; set; } = false;
+        public bool IsExploitable { get; set; } = false;
 
-        public bool IsVulnerable => DatabaseType != DatabaseType.Unknow;
+        public bool IsVulnerable => DatabaseType != DatabaseType.Unknow || 
+                    (FoundContext != null && FoundContext.Equals("XSS", StringComparison.OrdinalIgnoreCase));
         public override string ToString()
         {
+            if (FoundContext != null && FoundContext.Equals("XSS", StringComparison.OrdinalIgnoreCase))
+            {
+                return $"[XSS] Param: {VulnerableParam} | URL: {VulnerableURL}";
+            }
             return $"[{DatabaseType}] Param:{VulnerableParam} Prefix:'{WorkingPrefix}' Suffix:'{WorkingSuffix}'";
         }
     }

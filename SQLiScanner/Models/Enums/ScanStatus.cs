@@ -4,6 +4,7 @@ namespace SQLiScanner.Models.Enums
     {
         Pending,           // Đang nằm trong hàng đợi
         HeuristicScanning, // Đang quét nhanh bằng các thuật toán
+        HeuristicDone,
         AiAnalyzing,       // Rơi vào "vùng xám", đang sử dụng AI để phân tích
         CheckingColumnCount,
         ExploitingData,    

@@ -11,7 +11,7 @@ namespace SQLiScanner.Models
         // Giá trị tham số
         // Giá trị: "INTEGER", "STRING_SINGLE_QUOTE", 
         // "LIKE_SINGLE_QUOTE", "NESTED_PARENTHESIS", "UNKNOWN"
-        public string DetectedType { get; set; }
+        public string DetectedType { get; set; } = "UNKNOWN";
 
         // Đại diện độ tương đồng giữa 2 response heuristic 
         // Ví dụ: kiểm tra độ tương đồng giữa tham số id=1234-1 và id=1233
@@ -26,18 +26,11 @@ namespace SQLiScanner.Models
         public List<Boundary> ApplicableBoundaries { get; set; } = new();
 
         // Boundary hoạt động được thu nhặt từ Phase 3 ở ContextAnalyzer
-        public Boundary LockedBoundary { get; set; }
+        public Boundary? LockedBoundary { get; set; }
 
         // Tạo một thuộc tính để nhận prefix từ locked boundary cho tiện truy vấn
-        public string WorkingPrefix
-        {
-            get => LockedBoundary?.Prefix ?? "";
-        }
-
-        public string WorkingSuffix
-        {
-            get => LockedBoundary?.Suffix ?? "";
-        }
+        public string WorkingPrefix => LockedBoundary?.Prefix ?? "";
+        public string WorkingSuffix => LockedBoundary?.Suffix ?? "";
 
         public string WorkingComment
         {
@@ -52,7 +45,6 @@ namespace SQLiScanner.Models
                 if (LockedBoundary.Suffix.Contains("--"))
                     return "--";
 
-                // Default
                 return "--";
             }
         }
@@ -66,7 +58,6 @@ namespace SQLiScanner.Models
         public string Status { get; set; } = "UNCERTAIN";
 
         // HELPER METHOD
-        // Đã có boundary được xác nhạn
         public bool HasLockedBoundary => LockedBoundary != null;
         public bool HasPayloads => ApplicablePayloads?.Count > 0;
         public bool HasBoundaries => ApplicableBoundaries?.Count > 0 || HasLockedBoundary;
@@ -75,9 +66,14 @@ namespace SQLiScanner.Models
         public string GetLockedBoundaryInfo()
         {
             if (!HasLockedBoundary) return "Not locked";
-            return $"Ngữ cảnh: {LockedBoundary.ContextName} | " +
+            return $"Ngữ cảnh: {LockedBoundary!.ContextName} | " +
                    $"Prefix: '{LockedBoundary.Prefix}' | " +
                    $"Suffix: '{LockedBoundary.Suffix}'";
         }
+
+        // Cờ đánh dấu có hành vi rò rĩ dữ liệu (XSS)
+        public bool IsReflected { get; set; } = false;
+        // Chuỗi ngẫu nhiên để kiểm tra tính rò rỉ dữ liệu
+        public string CanaryToken { get; set; } = string.Empty;
     }
 }
