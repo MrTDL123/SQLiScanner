@@ -1,11 +1,19 @@
 ﻿using Microsoft.Extensions.DependencyInjection;
-using Microsoft.Extensions.DependencyInjection.Extensions;
 using SQLiScanner;
 using SQLiScanner.Modules;
 using SQLiScanner.Services;
 using SQLiScanner.Utility;
 using System;
+using System.Net;
+using System.Net.Http;
+using System.Net.Http;
+using System.Threading.RateLimiting;
 using System.Threading.Tasks;
+using Polly;
+using Polly.Retry;
+using Polly.RateLimiting;
+using Microsoft.Extensions.Http.Resilience;
+
 
 namespace SQLiScanner
 {
@@ -21,19 +29,54 @@ namespace SQLiScanner
                 client.Timeout = TimeSpan.FromSeconds(30);
             };
 
-            services.AddHttpClient<Crawler>(defaultWebClientConfig);
-            services.AddHttpClient<ContextAnalyzer>(defaultWebClientConfig);
-            services.AddHttpClient<DatabaseDetector>(defaultWebClientConfig);
-            services.AddHttpClient<UnionDetector>(defaultWebClientConfig);
+            Action<ResiliencePipelineBuilder<HttpResponseMessage>> configureResilience = builder =>
+            {
+                builder.AddRateLimiter(new TokenBucketRateLimiter(new TokenBucketRateLimiterOptions
+                {
+                    TokenLimit = 10,
+                    QueueLimit = 100,
+                    ReplenishmentPeriod = TimeSpan.FromSeconds(2),
+                    TokensPerPeriod = 10,
+                    AutoReplenishment = true
+                }));
+
+                builder.AddRetry(new RetryStrategyOptions<HttpResponseMessage>
+                {
+                    ShouldHandle = new PredicateBuilder<HttpResponseMessage>()
+                        .Handle<HttpRequestException>()
+                        .Handle<TimeoutException>()
+                        .HandleResult(response => response.StatusCode == HttpStatusCode.TooManyRequests    // 429
+                                               || response.StatusCode == HttpStatusCode.ServiceUnavailable // 503
+                                               || response.StatusCode == HttpStatusCode.Forbidden),         // 403 từ WAF 
+                    MaxRetryAttempts = 3,
+                    BackoffType = DelayBackoffType.Exponential,
+                    UseJitter = true,
+                    Delay = TimeSpan.FromSeconds(2),
+                    OnRetry = arguments =>
+                    {
+                        Logger.Info($"\n[!] Gặp rào cản mạng(Status: {arguments.Outcome.Result?.StatusCode})." +
+                                    $"Thử lại lần {arguments.AttemptNumber + 1} sau {arguments.RetryDelay.TotalSeconds:F2}giây...");
+
+                        return ValueTask.CompletedTask;
+                    }
+                });
+            };
+            
+            services.AddHttpClient<Crawler>(defaultWebClientConfig).AddResilienceHandler("SqliResilience", configureResilience);
+            services.AddHttpClient<ContextAnalyzer>(defaultWebClientConfig).AddResilienceHandler("SqliResilience", configureResilience);
+            services.AddHttpClient<DatabaseDetector>(defaultWebClientConfig).AddResilienceHandler("SqliResilience", configureResilience);
+            services.AddHttpClient<UnionDetector>(defaultWebClientConfig).AddResilienceHandler("SqliResilience", configureResilience);
+
             services.AddHttpClient<IAiApiClient, AiApiClient>(client =>
             {
                 client.BaseAddress = new Uri("https://localhost:7236/");
                 client.Timeout = TimeSpan.FromSeconds(60);
             });
+
             services.AddSingleton<AiConcurrencyEngine>();
             services.AddTransient<ScannerApp>();
-            var serviceProvider = services.BuildServiceProvider();
 
+            var serviceProvider = services.BuildServiceProvider();
             var app = serviceProvider.GetRequiredService<ScannerApp>();
 
             await app.RunAsync();

@@ -198,6 +198,7 @@ namespace SQLiScanner.Utility
 
                         Console.ForegroundColor = result.IsExploitable ? ConsoleColor.Red : ConsoleColor.DarkGray;
                         Console.WriteLine($"  - Exploitable    : {(result.IsExploitable ? "YES (Có thể khai thác sâu)" : "NO (Chỉ phát hiện)")}");
+                        Console.WriteLine($"  - Cookie Bypass  : {(result.IsCookieBypass ? "YES (Có thể bypass WAF bằng Cookie)" : "NO (Chỉ thao tác trên query/form inputs)")}");
 
                         if (!string.IsNullOrEmpty(result.ErrorMessage))
                         {

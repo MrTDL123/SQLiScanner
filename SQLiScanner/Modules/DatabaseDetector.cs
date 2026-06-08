@@ -13,6 +13,7 @@ using System.Text;
 using System.Net.Http;
 using System.Text.RegularExpressions;
 using SQLiScanner.Utilities;
+using AngleSharp.Html.Forms;
 namespace SQLiScanner.Modules
 {
 
@@ -93,13 +94,9 @@ namespace SQLiScanner.Modules
                 // Kiểm tra ngữ cảnh
                 PayloadState heuristicState = new PayloadState(target.FullUrl, paramName, "[Đang lấy payload dựa vào ngữ cảnh]");
                 trackingList.Add(heuristicState);
-                if (heuristicState == null)
-                {
-                    heuristicState = new PayloadState(target.FullUrl, paramName, "Tạo đại diện cho trạng thái payload");
-                }
 
                 heuristicState.UpdateStatus(ScanStatus.HeuristicScanning, "Bắt đầu phân tích bối cảnh đầu vào...");
-                HeuristicResult heuristicResult = await _contextAnalyzer.PerformHeuristicScanAsync(target, paramName, heuristicState);
+                HeuristicResult heuristicResult = await _contextAnalyzer.PerformHeuristicScanAsync(target, paramName, heuristicState, config.Token);
 
                 // Kiểm tra XSS
                 if (heuristicResult.IsReflected)
@@ -110,11 +107,12 @@ namespace SQLiScanner.Modules
                     {
                         HttpMethod = target.HttpMethod,
                         VulnerableURL = target.FullUrl,
-                        FoundContext = "XSS",                
-                        DatabaseType = DatabaseType.Unknow, 
+                        FoundContext = "XSS",
+                        DatabaseType = DatabaseType.Unknow,
                         VulnerableParam = paramName,
                         WorkingPrefix = string.Empty,
-                        WorkingSuffix = string.Empty
+                        WorkingSuffix = string.Empty,
+                        IsCookieBypass = heuristicResult.IsCookiePriority
                     };
 
                     config.DetectionResults.Add(xssResult);
@@ -164,10 +162,14 @@ namespace SQLiScanner.Modules
                                 PayloadState currentState = localStates[stateIndex];
                                 currentState.UpdateStatus(ScanStatus.HeuristicScanning, "Testing Error-Based...");
 
+                                string targetPayload = heuristicResult.IsCookiePriority ? payload : TamperPayload(payload);
+
                                 bool isErrorBasedSuccess = await CheckErrorBasedPayload(
                                     target, paramName, originalValue,
                                     prefix, suffix, payload, payloads.ErrorResponsePattern,
-                                    currentState, heuristicResult.IsReflected
+                                    currentState, heuristicResult.IsReflected,
+                                    heuristicResult.IsCookiePriority,
+                                    config.Token
                                 );
 
                                 if (isErrorBasedSuccess)
@@ -182,7 +184,8 @@ namespace SQLiScanner.Modules
                                         DatabaseType = GetDbTypeFromString(payloads.DBMS),
                                         VulnerableParam = paramName,
                                         WorkingPrefix = prefix,
-                                        WorkingSuffix = suffix
+                                        WorkingSuffix = suffix,
+                                        IsCookieBypass = heuristicResult.IsCookiePriority
                                     };
 
                                     Logger.Success($"PHÁT HIỆN {result.DatabaseType} THÔNG QUA THÔNG BÁO LỖI!");
@@ -229,11 +232,15 @@ namespace SQLiScanner.Modules
                                 PayloadState currentState = localStates[stateIndex];
                                 currentState.UpdateStatus(ScanStatus.HeuristicScanning, "Testing Boolean...");
 
+                                string targetPayload = heuristicResult.IsCookiePriority ? payload : TamperPayload(payload);
+
                                 bool isBooleanSuccess = await CheckBooleanBasedPayload(
                                     target, payloads.DBMS, paramName,
                                     originalValue, prefix, suffix, payload,
                                     currentState, config, pendingAiTasks,
-                                    heuristicResult.IsReflected);
+                                    heuristicResult.IsReflected,
+                                    heuristicResult.IsCookiePriority,
+                                    config.Token);
 
                                 if (isBooleanSuccess)
                                 {
@@ -248,7 +255,8 @@ namespace SQLiScanner.Modules
                                         DatabaseType = GetDbTypeFromString(payloads.DBMS),
                                         VulnerableParam = paramName,
                                         WorkingPrefix = prefix,
-                                        WorkingSuffix = suffix
+                                        WorkingSuffix = suffix,
+                                        IsCookieBypass = heuristicResult.IsCookiePriority
                                     };
                                     Logger.Success($"PHÁT HIỆN {result.DatabaseType} THÔNG QUA Boolean-Based!");
                                     config.DetectionResults.Add(result);
@@ -291,9 +299,12 @@ namespace SQLiScanner.Modules
                                 PayloadState currentState = localStates[stateIndex];
                                 currentState.UpdateStatus(ScanStatus.HeuristicScanning, "Testing Time-Based...");
 
+                                string targetPayload = heuristicResult.IsCookiePriority ? payload : TamperPayload(payload);
+
                                 bool isTimeBasedSuccess = await CheckTimeBasedPayloadAsync(
                                 target, paramName, originalValue,
-                                prefix, suffix, payload, currentState);
+                                prefix, suffix, payload, currentState, heuristicResult.IsCookiePriority,
+                                config.Token);
 
                                 if (isTimeBasedSuccess)
                                 {
@@ -307,7 +318,8 @@ namespace SQLiScanner.Modules
                                         DatabaseType = GetDbTypeFromString(payloads.DBMS),
                                         VulnerableParam = paramName,
                                         WorkingPrefix = prefix,
-                                        WorkingSuffix = suffix
+                                        WorkingSuffix = suffix,
+                                        IsCookieBypass = heuristicResult.IsCookiePriority
                                     };
                                     Logger.Success($"PHÁT HIỆN {result.DatabaseType} THÔNG QUA TIME-BASED!");
                                     config.DetectionResults.Add(result);
@@ -336,13 +348,14 @@ namespace SQLiScanner.Modules
 
         #region Các hàm phụ trợ
         private async Task<(bool isSuccess, long elapsedMs, int statusCode)> SendRequestWithTimingAsync(
-            CrawlResult target, string paramName, string payloadValue)
+            CrawlResult target, string paramName, string payloadValue,
+            bool isCookiePriority = false, string originalValue = "", CancellationToken cancellationToken = default)
         {
             var sw = new Stopwatch();
             try
             {
                 sw.Start();
-                var (_, _, statusCode, _) = await SendRequestAsync(target, paramName, payloadValue);
+                var (_, _, statusCode, _) = await SendRequestAsync(target, paramName, payloadValue, isCookiePriority, originalValue, cancellationToken);
                 sw.Stop();
 
                 return (true, sw.ElapsedMilliseconds, statusCode);
@@ -361,7 +374,8 @@ namespace SQLiScanner.Modules
             }
         }
         private async Task<(string? html, byte[]? bytes, int statusCode, string finalUrl)> SendRequestAsync(
-            CrawlResult target, string injectKey, string injectValue)
+            CrawlResult target, string injectKey, string injectValue,
+            bool isCookiePriority = false, string originalValue = "", CancellationToken cancellationToken = default)
         {
             try
             {
@@ -374,21 +388,24 @@ namespace SQLiScanner.Modules
                 // Kiểm tra liệu có phải đang chèn payload vào tham số query hay đang chèn vào Form
                 bool isQueryParam = target.RawQueryString.Contains($"{injectKey}=") || !target.Params.ContainsKey(injectKey);
 
+                string activeValue = isCookiePriority ? originalValue : injectValue;
+
                 if (isQueryParam)
                 {
-                    queryParams[injectKey] = injectValue;
+                    queryParams[injectKey] = activeValue;
                     bodyParams.Remove(injectKey);
                 }
                 else
                 {
-                    bodyParams[injectKey] = injectValue;
+                    bodyParams[injectKey] = activeValue;
                 }
 
-                var uriBuilder = new UriBuilder(target.BaseUrl);
-                uriBuilder.Query = queryParams.ToString();
+                var uriBuilder = new UriBuilder(target.BaseUrl)
+                {
+                    Query = queryParams.ToString()
+                };
 
                 request = new HttpRequestMessage(method, uriBuilder.ToString());
-
 
                 if (method == System.Net.Http.HttpMethod.Post)
                 {
@@ -405,13 +422,36 @@ namespace SQLiScanner.Modules
                     request.Headers.Add("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64)");
                 }
 
-                using var response = await _client.SendAsync(request, HttpCompletionOption.ResponseContentRead);
-                var bytes = await response.Content.ReadAsByteArrayAsync();
+                if (isCookiePriority)
+                {
+                    var cookieBuilder = new StringBuilder();
+                    cookieBuilder.Append(injectKey).Append('=').Append(injectValue);
+
+                    if (request.Headers.Contains("Cookie"))
+                    {
+                        var existingCookies = request.Headers.GetValues("Cookie");
+                        foreach (var cookie in existingCookies)
+                        {
+                            cookieBuilder.Append("; ").Append(cookie);
+                        }
+                        request.Headers.Remove("Cookie");
+                    }
+
+                    request.Headers.Add("Cookie", cookieBuilder.ToString());
+                }
+
+                using var response = await _client.SendAsync(request, HttpCompletionOption.ResponseContentRead, cancellationToken);
+                var bytes = await response.Content.ReadAsByteArrayAsync(cancellationToken);
                 var charset = response.Content.Headers.ContentType?.CharSet;
                 var encoding = charset is not null ? Encoding.GetEncoding(charset) : Encoding.UTF8;
                 string? finalUrl = response.RequestMessage.RequestUri.ToString();
 
                 return (encoding.GetString(bytes), bytes, (int)response.StatusCode, finalUrl);
+            }
+            catch (OperationCanceledException)
+            {
+                Logger.Warning("Yêu cầu mạng bị hủy bỏ theo yêu cầu của hệ thống/người dùng.");
+                return (null!, null!, 0, null!);
             }
             catch (Exception ex)
             {
@@ -429,11 +469,13 @@ namespace SQLiScanner.Modules
             string payload,
             string errorResponseRegex,
             PayloadState currentState,
-            bool isReflected
+            bool isReflected,
+            bool isCookiePriority,
+            CancellationToken cancellationToken = default
         )
         {
             string injectedPayload = $"{originalValue}{prefix} {payload} {suffix} ";
-            var (html, _, _, _) = await SendRequestAsync(target, paramName, injectedPayload);
+            var (html, _, _, _) = await SendRequestAsync(target, paramName, injectedPayload, isCookiePriority, originalValue, cancellationToken);
 
             if (string.IsNullOrEmpty(html))
             {
@@ -484,7 +526,9 @@ namespace SQLiScanner.Modules
         private async Task<bool> CheckBooleanBasedPayload(
             CrawlResult target, string dbms, string paramName, string originalValue,
             string prefix, string suffix, string payload, PayloadState currentState,
-            ScanConfig config, List<Task> pendingAiTasks, bool isReflected)
+            ScanConfig config, List<Task> pendingAiTasks, bool isReflected,
+            bool isCookiePriority,
+            CancellationToken cancellationToken = default)
         {
             // CHUẨN BỊ PAYLOAD
             string fullPayloadTrue = $"{originalValue}{prefix} {payload} {suffix} ";
@@ -493,7 +537,8 @@ namespace SQLiScanner.Modules
             string fullPayloadFalse = $"{originalValue}{prefix} {falsePayload} {suffix} ";
 
             Logger.Process($"[>] TRUE PayLoad {fullPayloadTrue}");
-            (string? htmlTrue, byte[]? bytesTrue, int statusTrue, string trueFinalUrl) = await SendRequestAsync(target, paramName, fullPayloadTrue);
+            (string? htmlTrue, byte[]? bytesTrue, int statusTrue, string trueFinalUrl) =
+                await SendRequestAsync(target, paramName, fullPayloadTrue, isCookiePriority, originalValue, cancellationToken);
             if (bytesTrue == null)
             {
                 Logger.Warning("Mất kết nối hoặc bị WAF chặn. Bỏ qua.");
@@ -503,7 +548,8 @@ namespace SQLiScanner.Modules
             Logger.Response(statusTrue, bytesTrue.Length);
 
             Logger.Process($"[>] FALSE Payload {fullPayloadFalse}");
-            (string? htmlFalse, byte[]? bytesFalse, int statusFalse, string falseFinalUrl) = await SendRequestAsync(target, paramName, fullPayloadFalse);
+            (string? htmlFalse, byte[]? bytesFalse, int statusFalse, string falseFinalUrl) =
+                await SendRequestAsync(target, paramName, fullPayloadFalse, isCookiePriority, originalValue, cancellationToken);
 
             if (bytesFalse == null)
             {
@@ -580,7 +626,8 @@ namespace SQLiScanner.Modules
                                     DatabaseType = GetDbTypeFromString(dbms),
                                     VulnerableParam = paramName,
                                     WorkingPrefix = prefix,
-                                    WorkingSuffix = suffix
+                                    WorkingSuffix = suffix,
+                                    IsCookieBypass = isCookiePriority
                                 };
                                 config.DetectionResults.Add(result);
                             }
@@ -601,7 +648,7 @@ namespace SQLiScanner.Modules
 
             Logger.Process("Đang xác định kịch bản phát hiện...");
             (string? htmlBase, byte[]? bytesBase, _, _) =
-                await SendRequestAsync(target, paramName, originalValue);
+                await SendRequestAsync(target, paramName, originalValue, false, "", cancellationToken);
 
             if (bytesBase == null)
             {
@@ -636,13 +683,10 @@ namespace SQLiScanner.Modules
 
 
         private async Task<bool> CheckTimeBasedPayloadAsync(
-            CrawlResult target,
-            string paramName,
-            string originalValue,
-            string prefix,
-            string suffix,
-            string payload,
-            PayloadState currentState)
+            CrawlResult target, string paramName, string originalValue,
+            string prefix, string suffix, string payload, PayloadState currentState,
+            bool isCookiePriority,
+            CancellationToken cancellationToken = default)
         {
             int sleepSeconds = 5; // Mặc định thời gian ngủ là 5 giây
             long sleepMilliseconds = sleepSeconds * 1000;
@@ -658,7 +702,7 @@ namespace SQLiScanner.Modules
             for (int i = 0; i < 3; i++)
             {
                 Logger.Process($"Kiểm tra lần {i}");
-                var (success, ms, status) = await SendRequestWithTimingAsync(target, paramName, originalValue);
+                var (success, ms, status) = await SendRequestWithTimingAsync(target, paramName, originalValue, false, "", cancellationToken);
                 Logger.Response(status, null, $"Thời gian phản hồi: {ms}ms");
                 if (success) baselineDelays.Add(ms);
             }
@@ -687,7 +731,7 @@ namespace SQLiScanner.Modules
 
             // 2. GỬI PAYLOAD TRUE (CÓ LỆNH SLEEP)
             Logger.Process($"Gửi Payload chứa hàm SLEEP: [{fullPayload}]");
-            var sleepResponse = await SendRequestWithTimingAsync(target, paramName, fullPayload);
+            var sleepResponse = await SendRequestWithTimingAsync(target, paramName, fullPayload, isCookiePriority, originalValue, cancellationToken);
             Logger.Response(sleepResponse.statusCode, null, $"Thời gian phản hồi: {sleepResponse.elapsedMs}");
             if (sleepResponse.elapsedMs >= thresholdMs || (!sleepResponse.isSuccess && sleepResponse.elapsedMs >= sleepMilliseconds))
             {
@@ -695,7 +739,7 @@ namespace SQLiScanner.Modules
                 // Gửi lại Baseline gốc một lần nữa. Nếu nó trả về NHANH, chứng tỏ lệnh Sleep vừa nãy là thật chứ không phải do Server Lag.
 
                 Logger.Process("Kiểm tra lại thời gian phản hồi khi không có payload");
-                var doubleCheck = await SendRequestWithTimingAsync(target, paramName, originalValue);
+                var doubleCheck = await SendRequestWithTimingAsync(target, paramName, originalValue, false, "", cancellationToken);
                 Logger.Response(doubleCheck.statusCode, null, $"Thời gian phản hồi: {doubleCheck.elapsedMs}");
 
                 if (doubleCheck.isSuccess && doubleCheck.elapsedMs <= maxBaseline + 1000) // Cho phép xê dịch 1s
@@ -715,8 +759,9 @@ namespace SQLiScanner.Modules
             return false;
         }
 
-        private SimilarityResult EvaluateSimilarity(string html1, string html2, int length1,
-                               int length2, double acceptableDiffThreshold = 0.05, double greyZoneThreshold = 0.20)
+        private SimilarityResult EvaluateSimilarity(
+            string html1, string html2, int length1, int length2,
+            double acceptableDiffThreshold = 0.05, double greyZoneThreshold = 0.20)
         {
             if (length1 == length2 && html1 == html2)
                 return SimilarityResult.Similar;
@@ -941,5 +986,10 @@ namespace SQLiScanner.Modules
             }
         }
         #endregion
+        private string TamperPayload(string payload)
+        {
+            //throw new NotImplementedException();
+            return "";
+        }
     }
 }

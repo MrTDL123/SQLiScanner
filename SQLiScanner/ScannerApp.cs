@@ -112,7 +112,7 @@ namespace SQLiScanner
 
             await RenderLiveScanTableAsync(sharedTrackingStates, async () =>
             {
-                foreach (var target in targets)
+                foreach (var target in targetsDemo)
                 {
                     if (scanConfig.Token.IsCancellationRequested) break;
                     await _dbDetector.DetectAsync(target, sharedTrackingStates, scanConfig);
@@ -131,10 +131,10 @@ namespace SQLiScanner
 
                         if (vulnerableState == null) continue;
 
-                        int colCount = await _unionDetector.GetColumnCountAsync(target, result, vulnerableState);
+                        int colCount = await _unionDetector.GetColumnCountAsync(target, result, vulnerableState, scanConfig.Token);
                         if (colCount > 0)
                         {
-                            var visibleCols = await _unionDetector.GetVisibleColumnsAsync(target, result, colCount, vulnerableState);
+                            var visibleCols = await _unionDetector.GetVisibleColumnsAsync(target, result, colCount, vulnerableState, scanConfig.Token);
                             if (visibleCols.Count > 0)
                             {
                                 string colInfo = string.Join(", ", visibleCols);

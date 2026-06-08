@@ -75,5 +75,7 @@ namespace SQLiScanner.Models
         public bool IsReflected { get; set; } = false;
         // Chuỗi ngẫu nhiên để kiểm tra tính rò rỉ dữ liệu
         public string CanaryToken { get; set; } = string.Empty;
+        // Cờ đánh dấu ưu tiên chèn payload vào cookie thay vì tham số query hoặc Form Inputs
+        public bool IsCookiePriority { get; set; } = false;
     }
 }

@@ -18,6 +18,8 @@ namespace SQLiScanner.Models
         public string ErrorMessage { get; set; }
         public bool IsExploitable { get; set; } = false;
 
+        public bool IsCookieBypass { get; set; } = false;
+
         public bool IsVulnerable => DatabaseType != DatabaseType.Unknow || 
                     (FoundContext != null && FoundContext.Equals("XSS", StringComparison.OrdinalIgnoreCase));
         public override string ToString()
@@ -26,7 +28,9 @@ namespace SQLiScanner.Models
             {
                 return $"[XSS] Param: {VulnerableParam} | URL: {VulnerableURL}";
             }
-            return $"[{DatabaseType}] Param:{VulnerableParam} Prefix:'{WorkingPrefix}' Suffix:'{WorkingSuffix}'";
+
+            string bypassTag = IsCookieBypass ? "[COOKIE-BYPASS]" : "";
+            return $"{bypassTag}[{DatabaseType}] Param:{VulnerableParam} Prefix:'{WorkingPrefix}' Suffix:'{WorkingSuffix}'";
         }
     }
 }
