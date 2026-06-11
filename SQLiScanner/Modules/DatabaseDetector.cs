@@ -162,14 +162,10 @@ namespace SQLiScanner.Modules
                                 PayloadState currentState = localStates[stateIndex];
                                 currentState.UpdateStatus(ScanStatus.HeuristicScanning, "Testing Error-Based...");
 
-                                string targetPayload = heuristicResult.IsCookiePriority ? payload : TamperPayload(payload);
-
                                 bool isErrorBasedSuccess = await CheckErrorBasedPayload(
-                                    target, paramName, originalValue,
-                                    prefix, suffix, payload, payloads.ErrorResponsePattern,
+                                    target, prefix, suffix, payload, payloads.ErrorResponsePattern,
                                     currentState, heuristicResult.IsReflected,
-                                    heuristicResult.IsCookiePriority,
-                                    config.Token
+                                    heuristicResult.Route, config.Token
                                 );
 
                                 if (isErrorBasedSuccess)
@@ -232,14 +228,10 @@ namespace SQLiScanner.Modules
                                 PayloadState currentState = localStates[stateIndex];
                                 currentState.UpdateStatus(ScanStatus.HeuristicScanning, "Testing Boolean...");
 
-                                string targetPayload = heuristicResult.IsCookiePriority ? payload : TamperPayload(payload);
-
                                 bool isBooleanSuccess = await CheckBooleanBasedPayload(
-                                    target, payloads.DBMS, paramName,
-                                    originalValue, prefix, suffix, payload,
+                                    target, payloads.DBMS, prefix, suffix, payload,
                                     currentState, config, pendingAiTasks,
-                                    heuristicResult.IsReflected,
-                                    heuristicResult.IsCookiePriority,
+                                    heuristicResult.IsReflected, heuristicResult.Route,
                                     config.Token);
 
                                 if (isBooleanSuccess)
@@ -299,11 +291,8 @@ namespace SQLiScanner.Modules
                                 PayloadState currentState = localStates[stateIndex];
                                 currentState.UpdateStatus(ScanStatus.HeuristicScanning, "Testing Time-Based...");
 
-                                string targetPayload = heuristicResult.IsCookiePriority ? payload : TamperPayload(payload);
-
                                 bool isTimeBasedSuccess = await CheckTimeBasedPayloadAsync(
-                                target, paramName, originalValue,
-                                prefix, suffix, payload, currentState, heuristicResult.IsCookiePriority,
+                                target, prefix, suffix, payload, currentState, heuristicResult.Route,
                                 config.Token);
 
                                 if (isTimeBasedSuccess)
@@ -348,14 +337,13 @@ namespace SQLiScanner.Modules
 
         #region Các hàm phụ trợ
         private async Task<(bool isSuccess, long elapsedMs, int statusCode)> SendRequestWithTimingAsync(
-            CrawlResult target, string paramName, string payloadValue,
-            bool isCookiePriority = false, string originalValue = "", CancellationToken cancellationToken = default)
+            CrawlResult target, string payload, InjectionRoute route, CancellationToken cancellationToken = default)
         {
             var sw = new Stopwatch();
             try
             {
                 sw.Start();
-                var (_, _, statusCode, _) = await SendRequestAsync(target, paramName, payloadValue, isCookiePriority, originalValue, cancellationToken);
+                var (_, _, statusCode, _) = await SendRequestAsync(target, payload, route, cancellationToken);
                 sw.Stop();
 
                 return (true, sw.ElapsedMilliseconds, statusCode);
@@ -374,8 +362,7 @@ namespace SQLiScanner.Modules
             }
         }
         private async Task<(string? html, byte[]? bytes, int statusCode, string finalUrl)> SendRequestAsync(
-            CrawlResult target, string injectKey, string injectValue,
-            bool isCookiePriority = false, string originalValue = "", CancellationToken cancellationToken = default)
+            CrawlResult target, string payload, InjectionRoute route, CancellationToken cancellationToken = default)
         {
             try
             {
@@ -386,18 +373,22 @@ namespace SQLiScanner.Modules
                 var bodyParams = new Dictionary<string, string>(target.Params);
 
                 // Kiểm tra liệu có phải đang chèn payload vào tham số query hay đang chèn vào Form
-                bool isQueryParam = target.RawQueryString.Contains($"{injectKey}=") || !target.Params.ContainsKey(injectKey);
+                bool isQueryParam = target.RawQueryString.Contains($"{route.TargetKey}=") || !target.Params.ContainsKey(route.TargetKey);
 
-                string activeValue = isCookiePriority ? originalValue : injectValue;
+                string valueToInject = route.Type switch
+                {
+                    RouteType.Cookie => route.OriginalValue, // Sử dụng Cookie là nơi chứa payload nên giữ nguyên giá trị các tham số query/inputs
+                    _ => payload                             // Ngược lại: Gửi payload trực tiếp qua URL/Body
+                };
 
                 if (isQueryParam)
                 {
-                    queryParams[injectKey] = activeValue;
-                    bodyParams.Remove(injectKey);
+                    queryParams[route.TargetKey] = valueToInject;
+                    bodyParams.Remove(route.TargetKey);
                 }
                 else
                 {
-                    bodyParams[injectKey] = activeValue;
+                    bodyParams[route.TargetKey] = valueToInject;
                 }
 
                 var uriBuilder = new UriBuilder(target.BaseUrl)
@@ -422,10 +413,10 @@ namespace SQLiScanner.Modules
                     request.Headers.Add("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64)");
                 }
 
-                if (isCookiePriority)
+                if (route.Type == RouteType.Cookie)
                 {
                     var cookieBuilder = new StringBuilder();
-                    cookieBuilder.Append(injectKey).Append('=').Append(injectValue);
+                    cookieBuilder.Append(route.TargetKey).Append('=').Append(payload);
 
                     if (request.Headers.Contains("Cookie"))
                     {
@@ -462,20 +453,21 @@ namespace SQLiScanner.Modules
 
         private async Task<bool> CheckErrorBasedPayload(
             CrawlResult target,
-            string paramName,
-            string originalValue,
             string prefix,
             string suffix,
             string payload,
             string errorResponseRegex,
             PayloadState currentState,
             bool isReflected,
-            bool isCookiePriority,
+            InjectionRoute route,
             CancellationToken cancellationToken = default
         )
         {
-            string injectedPayload = $"{originalValue}{prefix} {payload} {suffix} ";
-            var (html, _, _, _) = await SendRequestAsync(target, paramName, injectedPayload, isCookiePriority, originalValue, cancellationToken);
+            string rawFullPayload = $"{route.OriginalValue}{prefix} {payload} {suffix} ";
+            string fullPayload = route.Type == RouteType.Standard
+                ? TamperEngine.ApplyTamper(rawFullPayload)
+                : rawFullPayload;
+            var (html, _, _, _) = await SendRequestAsync(target, fullPayload, route, cancellationToken);
 
             if (string.IsNullOrEmpty(html))
             {
@@ -486,7 +478,7 @@ namespace SQLiScanner.Modules
             // Lọc html trường hợp nhiễu dữ liệu khi payload trả về giao diện thay vì chạy về máy chủ
             if (isReflected)
             {
-                html = ReflectionDetector.RemovePayloadFromText(html, injectedPayload);
+                html = ReflectionDetector.RemovePayloadFromText(html, fullPayload);
             }
 
             if (!string.IsNullOrEmpty(errorResponseRegex))
@@ -524,21 +516,27 @@ namespace SQLiScanner.Modules
         }
 
         private async Task<bool> CheckBooleanBasedPayload(
-            CrawlResult target, string dbms, string paramName, string originalValue,
+            CrawlResult target, string dbms,
             string prefix, string suffix, string payload, PayloadState currentState,
             ScanConfig config, List<Task> pendingAiTasks, bool isReflected,
-            bool isCookiePriority,
+            InjectionRoute route,
             CancellationToken cancellationToken = default)
         {
             // CHUẨN BỊ PAYLOAD
-            string fullPayloadTrue = $"{originalValue}{prefix} {payload} {suffix} ";
+            string rawPayloadTrue = $"{route.OriginalValue}{prefix} {payload} {suffix} ";
+            string fullPayloadTrue = route.Type == RouteType.Standard
+                ? TamperEngine.ApplyTamper(rawPayloadTrue)
+                : rawPayloadTrue;
 
             string falsePayload = payload.Replace("=", "!=").Replace(">", "<");
-            string fullPayloadFalse = $"{originalValue}{prefix} {falsePayload} {suffix} ";
+            string rawPayloadFalse = $"{route.OriginalValue}{prefix} {falsePayload} {suffix} ";
+            string fullPayloadFalse = route.Type == RouteType.Standard
+                ? TamperEngine.ApplyTamper(rawPayloadFalse)
+                : rawPayloadFalse;
 
             Logger.Process($"[>] TRUE PayLoad {fullPayloadTrue}");
             (string? htmlTrue, byte[]? bytesTrue, int statusTrue, string trueFinalUrl) =
-                await SendRequestAsync(target, paramName, fullPayloadTrue, isCookiePriority, originalValue, cancellationToken);
+                await SendRequestAsync(target, fullPayloadTrue, route, cancellationToken);
             if (bytesTrue == null)
             {
                 Logger.Warning("Mất kết nối hoặc bị WAF chặn. Bỏ qua.");
@@ -549,7 +547,7 @@ namespace SQLiScanner.Modules
 
             Logger.Process($"[>] FALSE Payload {fullPayloadFalse}");
             (string? htmlFalse, byte[]? bytesFalse, int statusFalse, string falseFinalUrl) =
-                await SendRequestAsync(target, paramName, fullPayloadFalse, isCookiePriority, originalValue, cancellationToken);
+                await SendRequestAsync(target, fullPayloadFalse, route, cancellationToken);
 
             if (bytesFalse == null)
             {
@@ -624,10 +622,10 @@ namespace SQLiScanner.Modules
                                     VulnerableURL = target.FullUrl,
                                     FoundContext = "BOOLEAN-BASED",
                                     DatabaseType = GetDbTypeFromString(dbms),
-                                    VulnerableParam = paramName,
+                                    VulnerableParam = route.TargetKey,
                                     WorkingPrefix = prefix,
                                     WorkingSuffix = suffix,
-                                    IsCookieBypass = isCookiePriority
+                                    IsCookieBypass = (route.Type == RouteType.Cookie)
                                 };
                                 config.DetectionResults.Add(result);
                             }
@@ -647,8 +645,9 @@ namespace SQLiScanner.Modules
             }
 
             Logger.Process("Đang xác định kịch bản phát hiện...");
+            var baselineRoute = InjectionRoute.CreateStandard(route.TargetKey, route.OriginalValue);
             (string? htmlBase, byte[]? bytesBase, _, _) =
-                await SendRequestAsync(target, paramName, originalValue, false, "", cancellationToken);
+                await SendRequestAsync(target, route.OriginalValue, baselineRoute, cancellationToken);
 
             if (bytesBase == null)
             {
@@ -683,26 +682,37 @@ namespace SQLiScanner.Modules
 
 
         private async Task<bool> CheckTimeBasedPayloadAsync(
-            CrawlResult target, string paramName, string originalValue,
-            string prefix, string suffix, string payload, PayloadState currentState,
-            bool isCookiePriority,
+            CrawlResult target,
+            string prefix,
+            string suffix,
+            string payload,
+            PayloadState currentState,
+            InjectionRoute route, // Thay thế hoàn toàn các biến rời rạc
             CancellationToken cancellationToken = default)
         {
-            int sleepSeconds = 5; // Mặc định thời gian ngủ là 5 giây
+            int sleepSeconds = 5;
             long sleepMilliseconds = sleepSeconds * 1000;
-
 
             Logger.Info($"\nSử dụng Payload: {payload}");
             string payloadStr = payload.Replace("[SLEEPTIME]", sleepSeconds.ToString());
-            string fullPayload = $"{originalValue}{prefix} AND {payloadStr} {suffix} ";
-            Logger.Process($"[TIME-BASED] Kiểm tra thời gian phản hồi trung bình từ đối tượng...");
 
-            // 1. LẤY BASELINE (3 MẪU ĐỂ LẤY TRUNG BÌNH & MAX)
+            // YÊU CẦU 2: Định tuyến và xáo trộn Tamper nếu đi qua ngả Standard (Bypass WAF)
+            string rawFullPayload = $"{route.OriginalValue}{prefix} AND {payloadStr} {suffix} ";
+            string fullPayload = route.Type == RouteType.Standard
+                ? TamperEngine.ApplyTamper(rawFullPayload)
+                : rawFullPayload;
+
+            Logger.Process($"[TIME-BASED] Kiểm tra thời gian phản hồi trung bình...");
+
+            // Khởi tạo một Route Standard sạch cho các request đo Baseline đo đạc không mang payload
+            var baselineRoute = InjectionRoute.CreateStandard(route.TargetKey, route.OriginalValue);
+
+            // 1. LẤY BASELINE
             List<long> baselineDelays = new List<long>();
             for (int i = 0; i < 3; i++)
             {
                 Logger.Process($"Kiểm tra lần {i}");
-                var (success, ms, status) = await SendRequestWithTimingAsync(target, paramName, originalValue, false, "", cancellationToken);
+                var (success, ms, status) = await SendRequestWithTimingAsync(target, route.OriginalValue, baselineRoute, cancellationToken);
                 Logger.Response(status, null, $"Thời gian phản hồi: {ms}ms");
                 if (success) baselineDelays.Add(ms);
             }
@@ -713,10 +723,8 @@ namespace SQLiScanner.Modules
                 return false;
             }
             long maxBaseline = baselineDelays.Max();
-            Logger.Info($"Thời gian phản hồi chậm nhất trong 3 lần đo: {maxBaseline}ms");
             long avgBaseline = (long)baselineDelays.Average();
-            Logger.Info($"Thời gian phản hồi trung bình trong 3 lần đo: {avgBaseline}ms");
-            // Nếu mạng quá lag (Baseline bình thường mà mất tới > 3-4 giây), thì không thể test Time-based (rất dễ False Positive)
+
             if (avgBaseline > 4000)
             {
                 Logger.Warning($"Mạng quá chậm (Ping ~{avgBaseline}ms). Bỏ qua Time-Based để tránh False Positive.");
@@ -724,27 +732,24 @@ namespace SQLiScanner.Modules
                 return false;
             }
 
-            // TÍNH TOÁN NGƯỠNG (THRESHOLD): Thời gian delay tối đa của mạng + Thời gian Sleep (trừ hao 500ms sai số)
             long thresholdMs = maxBaseline + sleepMilliseconds - 500;
-            Logger.Info($"Nếu thời gian request trả về lớn hơn {thresholdMs}ms ta mới nghi ngờ là có lỗi SQLi");
             Logger.Process($"[TIME-BASED] Baseline TB: {avgBaseline}ms | Ngưỡng xác nhận (Threshold): >= {thresholdMs}ms");
 
-            // 2. GỬI PAYLOAD TRUE (CÓ LỆNH SLEEP)
+            // 2. GỬI PAYLOAD TRUE (Áp dụng định tuyến theo InjectionRoute cấu hình sẵn)
             Logger.Process($"Gửi Payload chứa hàm SLEEP: [{fullPayload}]");
-            var sleepResponse = await SendRequestWithTimingAsync(target, paramName, fullPayload, isCookiePriority, originalValue, cancellationToken);
+            var sleepResponse = await SendRequestWithTimingAsync(target, fullPayload, route, cancellationToken);
             Logger.Response(sleepResponse.statusCode, null, $"Thời gian phản hồi: {sleepResponse.elapsedMs}");
+
             if (sleepResponse.elapsedMs >= thresholdMs || (!sleepResponse.isSuccess && sleepResponse.elapsedMs >= sleepMilliseconds))
             {
                 Logger.Success($"[!] Phát hiện độ trễ bất thường: {sleepResponse.elapsedMs}ms. Đang Double-Check...");
-                // Gửi lại Baseline gốc một lần nữa. Nếu nó trả về NHANH, chứng tỏ lệnh Sleep vừa nãy là thật chứ không phải do Server Lag.
 
                 Logger.Process("Kiểm tra lại thời gian phản hồi khi không có payload");
-                var doubleCheck = await SendRequestWithTimingAsync(target, paramName, originalValue, false, "", cancellationToken);
+                var doubleCheck = await SendRequestWithTimingAsync(target, route.OriginalValue, baselineRoute, cancellationToken);
                 Logger.Response(doubleCheck.statusCode, null, $"Thời gian phản hồi: {doubleCheck.elapsedMs}");
 
-                if (doubleCheck.isSuccess && doubleCheck.elapsedMs <= maxBaseline + 1000) // Cho phép xê dịch 1s
+                if (doubleCheck.isSuccess && doubleCheck.elapsedMs <= maxBaseline + 1000)
                 {
-
                     Logger.Success($"Hàm SLEEP có tác dụng với thời gian phản hồi Payload độc ({sleepResponse.elapsedMs}) > {thresholdMs}");
                     return true;
                 }
@@ -986,10 +991,5 @@ namespace SQLiScanner.Modules
             }
         }
         #endregion
-        private string TamperPayload(string payload)
-        {
-            //throw new NotImplementedException();
-            return "";
-        }
     }
 }

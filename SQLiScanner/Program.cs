@@ -62,10 +62,34 @@ namespace SQLiScanner
                 });
             };
             
-            services.AddHttpClient<Crawler>(defaultWebClientConfig).AddResilienceHandler("SqliResilience", configureResilience);
-            services.AddHttpClient<ContextAnalyzer>(defaultWebClientConfig).AddResilienceHandler("SqliResilience", configureResilience);
-            services.AddHttpClient<DatabaseDetector>(defaultWebClientConfig).AddResilienceHandler("SqliResilience", configureResilience);
-            services.AddHttpClient<UnionDetector>(defaultWebClientConfig).AddResilienceHandler("SqliResilience", configureResilience);
+            services.AddHttpClient<Crawler>(defaultWebClientConfig)
+                    .ConfigurePrimaryHttpMessageHandler(() => new SocketsHttpHandler
+                    {
+                        UseCookies = false,
+                        AllowAutoRedirect = false
+                    })
+                    .AddResilienceHandler("SqliResilience", configureResilience);
+            services.AddHttpClient<ContextAnalyzer>(defaultWebClientConfig)
+                    .ConfigurePrimaryHttpMessageHandler(() => new SocketsHttpHandler
+                    {
+                        UseCookies = false,
+                        AllowAutoRedirect = false
+                    })
+                    .AddResilienceHandler("SqliResilience", configureResilience);
+            services.AddHttpClient<DatabaseDetector>(defaultWebClientConfig)
+                    .ConfigurePrimaryHttpMessageHandler(() => new SocketsHttpHandler
+                    {
+                        UseCookies = false,
+                        AllowAutoRedirect = false
+                    })
+                    .AddResilienceHandler("SqliResilience", configureResilience);
+            services.AddHttpClient<UnionDetector>(defaultWebClientConfig)
+                    .ConfigurePrimaryHttpMessageHandler(() => new SocketsHttpHandler
+                    {
+                        UseCookies = false,
+                        AllowAutoRedirect = false
+                    })
+                    .AddResilienceHandler("SqliResilience", configureResilience);
 
             services.AddHttpClient<IAiApiClient, AiApiClient>(client =>
             {

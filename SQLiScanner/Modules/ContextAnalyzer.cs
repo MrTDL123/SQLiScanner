@@ -1,4 +1,5 @@
 ﻿using AngleSharp.Html.Parser;
+using AngleSharp.Text;
 using SQLiScanner.Models;
 using SQLiScanner.Models.Enums;
 using SQLiScanner.Utilities;
@@ -55,24 +56,10 @@ namespace SQLiScanner.Modules
 
             try
             {
-                string canary = ReflectionDetector.GenerateCanaryToken();
-
-                currentState.UpdateStatus(ScanStatus.HeuristicScanning, $"Kiểm tra XSS: Gửi token {canary}");
-                var (canaryHtml, canaryBytes, _, _) = await SendPayloadAsync(target, paramName, canary, cancellationToken);
-
-                if (canaryBytes != null)
-                {
-                    if (ReflectionDetector.IsPayloadReflected(canaryHtml, canary))
-                    {
-                        result.IsReflected = true;
-                        result.CanaryToken = canary;
-                        Logger.Warning($"[!] Phát hiện tham số [{paramName}] bị rò rỉ dữ liệu (XSS/Reflected). Kích hoạt bộ lọc chống nhiễu DOM.");
-                        currentState.UpdateStatus(ScanStatus.HeuristicScanning, "XSS/Reflected: Phát hiện rò rỉ đầu vào");
-                    }
-                }
-
+                InjectionRoute route = InjectionRoute.CreateStandard(paramName, originalValue);
+                
                 currentState.UpdateStatus(ScanStatus.HeuristicScanning, "Đang tải cấu trúc trang gốc (Baseline)...");
-                var (baseHtml, baseBytes, baseStatus, baseHeaders) = await SendPayloadAsync(target, paramName, originalValue, cancellationToken);
+                var (baseHtml, baseBytes, baseStatus, baseHeaders) = await SendPayloadAsync(target, originalValue, route, cancellationToken);
                 if (baseBytes == null)
                 {
                     result.Status = "FAILED";
@@ -95,14 +82,31 @@ namespace SQLiScanner.Modules
                 {
                     currentState.UpdateStatus(ScanStatus.HeuristicScanning, $"Tìm thấy {minedCookies.Count} Cookies hoạt động: {string.Join(", ", minedCookies)}");
                 }
-                
+
                 currentState.UpdateStatus(ScanStatus.HeuristicScanning, $"Đang chạy Cookie Aliasing cho [{paramName}]...");
-                var priority = await CheckCookieAliasingAsync(target, paramName, minedCookies, cancellationToken);
+                route = await CheckCookieAliasingAsync(target, paramName, minedCookies, cancellationToken);
 
-                bool isCookiePriority = (priority == ParameterPriority.CookieOverride);
-                result.IsCookiePriority = isCookiePriority;
+                result.Route = route;
 
-                if (isCookiePriority)
+                string canary = ReflectionDetector.GenerateCanaryToken();
+
+                currentState.UpdateStatus(ScanStatus.HeuristicScanning, $"Kiểm tra XSS: Gửi token {canary}");
+                var (canaryHtml, canaryBytes, _, _) = await SendPayloadAsync(target, canary, route, cancellationToken);
+
+                if (canaryBytes != null)
+                {
+                    if (ReflectionDetector.IsPayloadReflected(canaryHtml, canary))
+                    {
+                        result.IsReflected = true;
+                        result.CanaryToken = canary;
+                        Logger.Warning($"[!] Phát hiện tham số [{paramName}] bị rò rỉ dữ liệu (XSS/Reflected). Kích hoạt bộ lọc chống nhiễu DOM.");
+                        currentState.UpdateStatus(ScanStatus.HeuristicScanning, "XSS/Reflected: Phát hiện rò rỉ đầu vào");
+                    }
+                }
+
+                result.IsCookiePriority = (route.Type == RouteType.Cookie);
+
+                if (result.IsCookiePriority)
                 {
                     Logger.Success($"ĐỊNH TUYẾN MỚI: Server ưu tiên Cookie cho [{paramName}]. Kích hoạt định tuyến Payload vào Header!");
                 }
@@ -116,7 +120,7 @@ namespace SQLiScanner.Modules
                 // PHASE 1: Kiểm tra ngữ cảnh là INTEGER
                 Logger.Info("Kiểm tra ngữ cảnh integer...");
                 currentState.UpdateStatus(ScanStatus.HeuristicScanning, "Heuristic: Kiểm tra bối cảnh số nguyên (Integer)...");
-                await Phase1_DetectIntegerContextAsync(target, paramName, result, currentState, isCookiePriority, originalValue, cancellationToken);
+                await Phase1_DetectIntegerContextAsync(target, result, currentState, route, cancellationToken);
 
                 if (result.DetectedType != "INTEGER")
                 {
@@ -124,9 +128,9 @@ namespace SQLiScanner.Modules
                     Logger.Phase("[PHASE 2] KIỂM TRA NGỮ CẢNH STRING THÔNG QUA ERROR-BASED");
                     currentState.UpdateStatus(ScanStatus.HeuristicScanning, "Heuristic: Kiểm tra bối cảnh chuỗi (String/LIKE)...");
                     await Phase2_DetectStringContextAsync(
-                        target, paramName, originalValue, baseStatus,
-                        baseBytes.Length, baseHtml, result, currentState,
-                        isCookiePriority, cancellationToken
+                        target, baseStatus, baseBytes.Length, baseHtml, 
+                        result, currentState,
+                        route, cancellationToken
                     );
                 }
 
@@ -137,9 +141,9 @@ namespace SQLiScanner.Modules
                     Logger.Phase("[PHASE 3] XÁC ĐỊNH CHÍNH XÁC BOUNDARY");
                     currentState.UpdateStatus(ScanStatus.HeuristicScanning, "Heuristic: Đang dò tìm và khóa Boundary...");
                     await Phase3_VerifyBoundaryAsync(
-                        target, paramName, originalValue, baseStatus,
-                        baseBytes.Length, baseHtml, result, currentState,
-                        isCookiePriority, cancellationToken
+                        target, baseStatus, baseBytes.Length, baseHtml, 
+                        result, currentState,
+                        route, cancellationToken
                     );
                 }
 
@@ -301,11 +305,9 @@ namespace SQLiScanner.Modules
 
         private async Task<(string html, byte[] bytes, int statusCode, HttpResponseHeaders? headers)> SendPayloadAsync(
             CrawlResult target,
-            string paramName,
             string payload,
-            CancellationToken cancellationToken = default,
-            bool isCookiePriority = false,
-            string originalValue = "")
+            InjectionRoute route, 
+            CancellationToken cancellationToken = default)
         {
             try
             {
@@ -315,18 +317,22 @@ namespace SQLiScanner.Modules
                 var queryParams = System.Web.HttpUtility.ParseQueryString(target.RawQueryString);
                 var bodyParams = new Dictionary<string, string>(target.Params);
 
-                bool isQueryParam = target.RawQueryString.Contains($"{paramName}=") || !target.Params.ContainsKey(paramName);
+                bool isQueryParam = target.RawQueryString.Contains($"{route.TargetKey}=") || !target.Params.ContainsKey(route.TargetKey);
 
-                string activeValue = isCookiePriority ? originalValue : payload;
+                string valueToInject = route.Type switch
+                {
+                    RouteType.Cookie => route.OriginalValue,
+                    _ => payload
+                };
 
                 if (isQueryParam)
                 {
-                    queryParams[paramName] = activeValue;
-                    bodyParams.Remove(paramName);
+                    queryParams[route.TargetKey] = valueToInject;
+                    bodyParams.Remove(route.TargetKey);
                 }
                 else
                 {
-                    bodyParams[paramName] = activeValue;
+                    bodyParams[route.TargetKey] = valueToInject;
                 }
 
                 var uriBuilder = new UriBuilder(target.BaseUrl);
@@ -349,10 +355,10 @@ namespace SQLiScanner.Modules
                     request.Headers.Add("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64)");
                 }
 
-                if (isCookiePriority)
+                if (route.Type == RouteType.Cookie)
                 {
                     var cookieBuilder = new StringBuilder();
-                    cookieBuilder.Append(paramName).Append('=').Append(payload);
+                    cookieBuilder.Append(route.TargetKey).Append('=').Append(payload);
 
                     // Nối chuỗi các cookie cũ đảm bảo khi gửi không thiếu dữ liệu
                     if (request.Headers.Contains("Cookie"))
@@ -390,15 +396,15 @@ namespace SQLiScanner.Modules
 
         #region Các hàm phụ trợ
         private async Task Phase1_DetectIntegerContextAsync(
-            CrawlResult target, string paramName, HeuristicResult result, PayloadState currentState, 
-            bool isCookiePriority, string originalValue, CancellationToken cancellationToken = default)
+            CrawlResult target, HeuristicResult result, PayloadState currentState,
+            InjectionRoute route, CancellationToken cancellationToken = default)
         {
             Logger.Info("KỲ VỌNG: Các tham số với payload là các toán tử, nếu như tham số là INTEGER thì các phép toán này sẽ hoạt động.");
             // Lấy base response
             Logger.Process("Kiểm tra tham số với giá trị = 1");
             currentState.UpdateStatus(ScanStatus.HeuristicScanning, "Integer Check: Gửi request với tham số = 1...");
             var (baselineHtml, baselineBytes, baselineStatus, _) =
-                await SendPayloadAsync(target, paramName, INT_PAYLOAD_1, cancellationToken, isCookiePriority, originalValue);
+                await SendPayloadAsync(target, INT_PAYLOAD_1, route, cancellationToken);
             if (baselineBytes == null)
             {
                 result.DetectedType = "UNKNOWN";
@@ -413,7 +419,8 @@ namespace SQLiScanner.Modules
             Logger.Process("Kiểm tra tham số với giá trị = 1-1");
             currentState.UpdateStatus(ScanStatus.HeuristicScanning, "Integer Check: Gửi biểu thức toán học [1-1]...");
             var (falseHtml, falseBytes, falseStatus, _) =
-                await SendPayloadAsync(target, paramName, INT_PAYLOAD_2, cancellationToken, isCookiePriority, originalValue);
+                await SendPayloadAsync(target, INT_PAYLOAD_2, route, cancellationToken);
+
             if (falseBytes == null)
             {
                 result.DetectedType = "UNKNOWN";
@@ -428,7 +435,7 @@ namespace SQLiScanner.Modules
             Logger.Process("Kiểm tra tham số với giá trị = 2-1");
             currentState.UpdateStatus(ScanStatus.HeuristicScanning, "Integer Check: Gửi biểu thức toán học [2-1]...");
             var (trueHtml, trueBytes, trueStatus, _) =
-                await SendPayloadAsync(target, paramName, INT_PAYLOAD_3, cancellationToken, isCookiePriority, originalValue);
+                await SendPayloadAsync(target, INT_PAYLOAD_3, route, cancellationToken);
             if (trueBytes == null)
             {
                 result.DetectedType = "UNKNOWN";
@@ -479,21 +486,21 @@ namespace SQLiScanner.Modules
         }
 
         private async Task Phase2_DetectStringContextAsync(
-            CrawlResult target, string paramName, string originalValue,
+            CrawlResult target,
             int baselineStatus, int baselineLength, string baselineHtml,
             HeuristicResult result, PayloadState currentState,
-            bool isCookiePriority, CancellationToken cancellationToken = default)
+            InjectionRoute route, CancellationToken cancellationToken = default)
         {
             Logger.Info("KỲ VỌNG: Cố tình chèn các Prefix gây lỗi, nếu như đúng là ngữ cảnh STRING thì sẽ báo về lỗi");
             const double STRING_LIKE_THRESHOLD = 0.90;
             Logger.Process($"Đặt ngưỡng mức trùng nhau là {STRING_LIKE_THRESHOLD * 100}%, sai số {((1.0 - STRING_LIKE_THRESHOLD) * 100):F1}%");
             var testPayloads = new[]
             {
-                $"{originalValue}'",    // Single quote
-                $"{originalValue}\"",   // Double quote
-                $"{originalValue}%'",    // LIKE pattern single
-                $"{originalValue}%\"",   // LIKE pattern double
-                $"{originalValue}')"     // Nested parenthesis
+                $"{route.OriginalValue}'",    // Single quote
+                $"{route.OriginalValue}\"",   // Double quote
+                $"{route.OriginalValue}%'",    // LIKE pattern single
+                $"{route.OriginalValue}%\"",   // LIKE pattern double
+                $"{route.OriginalValue}')"     // Nested parenthesis
             };
 
             foreach (var payload in testPayloads)
@@ -501,7 +508,8 @@ namespace SQLiScanner.Modules
                 Logger.Process($"Chèn payload [{payload}]");
                 currentState.UpdateStatus(ScanStatus.HeuristicScanning, $"String Check: Gửi payload [{payload}] gây lỗi không...");
                 var (testHtml, testBytes, testStatus, _) =
-                    await SendPayloadAsync(target, paramName, payload, cancellationToken, isCookiePriority, originalValue);
+                    await SendPayloadAsync(target, payload, route, cancellationToken);
+
                 if (testBytes == null)
                 {
                     Logger.Skipped("Không nhận được phản hồi từ đối tượng. Chuyển sang Payload khác!");
@@ -540,10 +548,10 @@ namespace SQLiScanner.Modules
         }
 
         private async Task Phase3_VerifyBoundaryAsync(
-            CrawlResult target, string paramName, string originalValue,
+            CrawlResult target,
             int baselineStatus, int baselineLength, string baselineHtml,
             HeuristicResult result, PayloadState currentState,
-            bool isCookiePriority, CancellationToken cancellationToken = default)
+            InjectionRoute route, CancellationToken cancellationToken = default)
         {
             Logger.Info("KỲ VỌNG: Xác định chính xác boundary thông qua thử từng boundary bằng BOOLEAN LOGIC.");
             Logger.Info("Sử dụng 2 payload True (8341=8341) và False (8341=8342) để kiểm tra");
@@ -557,13 +565,13 @@ namespace SQLiScanner.Modules
                 string falseCondition = "8341=8342";
 
                 Logger.Process($"Thiết lặp True Payload (Prefix: [{boundary.Prefix}] | Suffix: [{boundary.Suffix}])");
-                string truePayload = $"{originalValue}{boundary.Prefix} AND {trueCondition} {boundary.Suffix} ";
+                string truePayload = $"{route.OriginalValue}{boundary.Prefix} AND {trueCondition} {boundary.Suffix} ";
                 Logger.Process($"Thiết lặp False Payload (Prefix: [{boundary.Prefix}] | Suffix: [{boundary.Suffix}])");
-                string falsePayload = $"{originalValue}{boundary.Prefix} AND {falseCondition} {boundary.Suffix} ";
+                string falsePayload = $"{route.OriginalValue}{boundary.Prefix} AND {falseCondition} {boundary.Suffix} ";
 
                 // TEST FALSE PAYLOAD (Kỳ vọng: Khác Base)
                 Logger.Process("Gửi False Payload...");
-                var (htmlFalse, bytesFalse, statusFalse, _) = await SendPayloadAsync(target, paramName, falsePayload, cancellationToken, isCookiePriority, originalValue);
+                var (htmlFalse, bytesFalse, statusFalse, _) = await SendPayloadAsync(target, falsePayload, route, cancellationToken);
                 if (bytesFalse == null)
                 {
                     Logger.Warning("Không nhận được phản hồi từ đối tượng. Chuyển sang boundary tiếp theo!");
@@ -579,7 +587,7 @@ namespace SQLiScanner.Modules
 
                 // TEST TRUE PAYLOAD (Kỳ vọng: Giống Base)
                 Logger.Process("Gửi True Payload...");
-                var (htmlTrue, bytesTrue, statusTrue, _) = await SendPayloadAsync(target, paramName, truePayload, cancellationToken, isCookiePriority, originalValue);
+                var (htmlTrue, bytesTrue, statusTrue, _) = await SendPayloadAsync(target, truePayload, route, cancellationToken);
                 if (bytesTrue == null)
                 {
                     Logger.Warning("Không nhận được phản hồi từ đối tượng. Chuyển sang boundary tiếp theo!");
@@ -763,6 +771,33 @@ namespace SQLiScanner.Modules
 
             return result;
         }
+
+        // Tính khoảng cách Levenshtein (Chi phí đổi từ chuỗi A sang chuỗi B)
+        private int CalculateLevenshteinDistance(string source, string target)
+        {
+            if (string.IsNullOrEmpty(source)) return target?.Length ?? 0;
+            if (string.IsNullOrEmpty(target)) return source.Length;
+
+            source = source.ToLower();
+            target = target.ToLower();
+
+            var v0 = new int[target.Length + 1];
+            var v1 = new int[target.Length + 1];
+
+            for (int i = 0; i < v0.Length; i++) v0[i] = i;
+
+            for (int i = 0; i < source.Length; i++)
+            {
+                v1[0] = i + 1;
+                for (int j = 0; j < target.Length; j++)
+                {
+                    int cost = (source[i] == target[j]) ? 0 : 1;
+                    v1[j + 1] = Math.Min(v1[j] + 1, Math.Min(v0[j + 1] + 1, v0[j] + cost));
+                }
+                for (int j = 0; j < v0.Length; j++) v0[j] = v1[j];
+            }
+            return v1[target.Length];
+        }
         #endregion
 
         #region Thuật toán dò tìm Cookie & Aliasing
@@ -858,11 +893,9 @@ namespace SQLiScanner.Modules
 
                 var (fuzzHtml, fuzzBytes, fuzzStatus, _) = await SendPayloadAsync(
                     target,
-                    paramName: word,
                     payload: canaryValue,
-                    cancellationToken: cancellationToken,
-                    isCookiePriority: true,
-                    originalValue: originalValue
+                    new InjectionRoute(RouteType.Cookie, word, originalValue),
+                    cancellationToken: cancellationToken
                 );
 
                 if (fuzzBytes == null) continue;
@@ -882,30 +915,35 @@ namespace SQLiScanner.Modules
             return discoveredActiveCookies;
         }
 
-        public async Task<ParameterPriority> CheckCookieAliasingAsync(
+        public async Task<InjectionRoute> CheckCookieAliasingAsync(
             CrawlResult target,
             string paramName,
             HashSet<string> minedCookies,
             CancellationToken cancellationToken)
         {
-            if (minedCookies.Count > 0 && !minedCookies.Contains(paramName))
-            {
-                return ParameterPriority.QueryOrFormOnly;
-            }
+            var candidateCookies = GetPotentialCookieAliases(paramName, minedCookies);
 
             string originalValue = target.Params.TryGetValue(paramName, out var bodyVal)
                 ? bodyVal
                 : (System.Web.HttpUtility.ParseQueryString(target.RawQueryString)[paramName] ?? "");
 
-
             string mutatedValue = int.TryParse(originalValue, out _) ? "999" : "mutated_state_check";
             // Request Baseline (Tham số gốc, không truyền cookie)
-            var (baseHtml, baseBytes, baseStatus, _) = await SendPayloadAsync(target, paramName, originalValue, cancellationToken);
-            if (baseBytes == null) return ParameterPriority.Uncertain;
+            var (baseHtml, baseBytes, baseStatus, _) = await SendPayloadAsync(
+                target, 
+                originalValue,
+                InjectionRoute.CreateStandard(paramName, originalValue),
+                cancellationToken);
+
+            if (baseBytes == null) return InjectionRoute.CreateStandard(paramName, originalValue);
 
             // Request Mutation (Tham số đột biến, không truyền Cookie)
-            var (mutatedHtml, mutatedBytes, mutatedStatus, _) = await SendPayloadAsync(target, paramName, mutatedValue, cancellationToken);
-            if (mutatedBytes == null) return ParameterPriority.Uncertain;
+            var (mutatedHtml, mutatedBytes, mutatedStatus, _) = await SendPayloadAsync(
+                target, 
+                mutatedValue,
+                InjectionRoute.CreateStandard(paramName, originalValue),
+                cancellationToken);
+            if (mutatedBytes == null) return InjectionRoute.CreateStandard(paramName, originalValue);
 
             double baselineVsMutation = CalculateSimilarity(
                 baseStatus, baseBytes.Length, baseHtml,
@@ -916,40 +954,72 @@ namespace SQLiScanner.Modules
             if (baselineVsMutation > 0.98)
             {
                 Logger.Info($"[Cookie Aliasing] Tham số [{paramName}] không làm thay đổi trạng thái giao diện. Bỏ qua phân định.");
-                return ParameterPriority.Uncertain;
+                return InjectionRoute.CreateStandard(paramName, originalValue);
             }
 
-            // Request Conflict (Query/Form giữ nguyên giá trị Gốc, nhưng Cookie truyền giá trị Đột biến)
-            var (conflictHtml, conflictBytes, conflictStatus, _) = await SendPayloadAsync(
-                target,
-                paramName: paramName,
-                payload: mutatedValue,
-                cancellationToken: cancellationToken,
-                isCookiePriority: true,     
-                originalValue: originalValue  // Giữ nguyên giá trị gốc trên URL/Form để tránh kích hoạt xử lý chính
-            );
-
-            if (conflictBytes == null) return ParameterPriority.Uncertain;
-
-            // Kiểm tra việc thay đổi trên cookie có tương ứng với khi payload độc truyền vào tham số query/inputs hay không
-            double conflictVsMutation = CalculateSimilarity(
-                mutatedStatus, mutatedBytes.Length, mutatedHtml,
-                conflictStatus, conflictBytes.Length, conflictHtml
-            );
-
-            double conflictVsBaseline = CalculateSimilarity(
-                baseStatus, baseBytes.Length, baseHtml,
-                conflictStatus, conflictBytes.Length, conflictHtml
-            );
-
-            // Nếu trang Conflict giống hệt trang Mutation (> 95%) và khác hẳn Baseline (< 90%): 
-            // Điều đó chứng tỏ Server đã bỏ qua giá trị ở URL/Form và lấy trực tiếp giá trị từ Cookie!
-            if (conflictVsMutation > 0.95 && conflictVsBaseline < 0.90)
+            foreach (var cookieName in candidateCookies)
             {
-                return ParameterPriority.CookieOverride;
+                if (cancellationToken.IsCancellationRequested) break;
+
+                // Request Conflict (Query/Form giữ nguyên giá trị Gốc, nhưng Cookie truyền giá trị Đột biến)
+                var (conflictHtml, conflictBytes, conflictStatus, _) = await SendPayloadAsync(
+                    target,
+                    payload: mutatedValue,
+                    new InjectionRoute(RouteType.Cookie, cookieName, originalValue),
+                    cancellationToken: cancellationToken
+                );
+
+                if (conflictBytes == null) continue;
+
+                // Kiểm tra việc thay đổi trên cookie có tương ứng với khi payload độc truyền vào tham số query/inputs hay không
+                double conflictVsMutation = CalculateSimilarity(
+                    mutatedStatus, mutatedBytes.Length, mutatedHtml,
+                    conflictStatus, conflictBytes.Length, conflictHtml
+                );
+
+                double conflictVsBaseline = CalculateSimilarity(
+                    baseStatus, baseBytes.Length, baseHtml,
+                    conflictStatus, conflictBytes.Length, conflictHtml
+                );
+
+                // Nếu trang Conflict giống hệt trang Mutation (> 95%) và khác hẳn Baseline (< 90%): 
+                // Điều đó chứng tỏ Server đã bỏ qua giá trị ở URL/Form và lấy trực tiếp giá trị từ Cookie!
+                if (conflictVsMutation > 0.95 && conflictVsBaseline < 0.90)
+                {
+                    Logger.Success($"[WAF Bypass] Server ưu tiên đọc Cookie [{cookieName}] thay vì tham số [{paramName}]!");
+                    return new InjectionRoute(RouteType.Cookie, cookieName, originalValue);
+                }
             }
 
-            return ParameterPriority.QueryOrFormOnly;
+            return InjectionRoute.CreateStandard(paramName, originalValue);
+        }
+
+        private List<string> GetPotentialCookieAliases(string paramName, HashSet<string> minedCookies)
+        {
+            var candidates = new List<string>();
+
+            candidates.Add(paramName);
+
+            if (minedCookies == null || minedCookies.Count == 0)
+                return candidates.Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+
+            foreach (var cookie in minedCookies)
+            {
+                // Khớp chuỗi con (Substring)
+                bool isSubstring = cookie.Contains(paramName, StringComparison.OrdinalIgnoreCase) ||
+                                   paramName.Contains(cookie, StringComparison.OrdinalIgnoreCase);
+
+                // Sai số chính tả (Levenshtein Distance <= 2)
+                int distance = CalculateLevenshteinDistance(paramName, cookie);
+                bool isTypo = distance <= 3;
+
+                if (isSubstring || isTypo)
+                {
+                    candidates.Add(cookie);
+                }
+            }
+
+            return candidates.Distinct(StringComparer.OrdinalIgnoreCase).ToList();
         }
         #endregion
     }
