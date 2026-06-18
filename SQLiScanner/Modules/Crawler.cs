@@ -1,27 +1,23 @@
 ﻿using HtmlAgilityPack;
 using SQLiScanner.Models;
-using SQLiScanner.Utility;
-using System;
-using System.Collections.Generic;
-using System.Linq;
-using System.Runtime.CompilerServices;
-using System.Text;
 using System.Text.RegularExpressions;
-using System.Threading.Tasks;
 using System.Web;
+using System.Net;
 
 namespace SQLiScanner.Modules
 {
     public class Crawler
     {
         private readonly HttpClient _client;
+        private readonly CookieContainer _cookieContainer;
         //Dùng để lọc các url có trùng cấu trúc
         private HashSet<string> _scannedSignatures = new HashSet<string>();
         // Lưu trữ các URL đã truy cập
         private HashSet<string> _visitedUrls = new HashSet<string>();
-        public Crawler(HttpClient client)
+        public Crawler(HttpClient client, CookieContainer cookieContainer)
         {
             _client = client;
+            _cookieContainer = cookieContainer;
         }
         public async Task<List<CrawlResult>> CrawlAsync(string rootUrl, int maxDepth)
         {
@@ -50,14 +46,17 @@ namespace SQLiScanner.Modules
                 try
                 {
                     string html = await _client.GetStringAsync(currentUrl);
+                    Uri currentUri = new Uri(currentUrl);
+                    string currentCookies = _cookieContainer.GetCookieHeader(currentUri);
+
                     var doc = new HtmlDocument();
                     doc.LoadHtml(html);
 
-                    ExtractForms(currentUrl, doc, results);
+                    ExtractForms(currentUrl, doc, results, currentCookies);
 
-                    ExtractLinksAndQueue(rootUrl, currentUrl, doc, results, urlQueue, currentDepth, maxDepth);
+                    ExtractLinksAndQueue(rootUrl, currentUrl, doc, results, urlQueue, currentDepth, maxDepth, currentCookies);
 
-                    await ExtractLinksFromScriptTags(rootUrl, currentUrl, doc, results);
+                    await ExtractLinksFromScriptTags(rootUrl, currentUrl, doc, results, currentCookies);
                 }
                 catch (Exception ex)
                 {
@@ -101,7 +100,8 @@ namespace SQLiScanner.Modules
             List<CrawlResult> results,
             Queue<(string, int)> queue,
             int currentDepth,
-            int maxDepth)
+            int maxDepth,
+            string currentCookies)
         {
             //tìm tất cả thẻ a có thuộc tính href
             var linkNodes = doc.DocumentNode.SelectNodes("//a[@href]");
@@ -145,7 +145,8 @@ namespace SQLiScanner.Modules
                                 HttpMethod = "GET",
                                 IsForm = false,
                                 Params = paramsDict,
-                                RawQueryString = rawQuery
+                                RawQueryString = rawQuery,
+                                OriginalCookie = currentCookies
                             });
                         }
                     }
@@ -169,7 +170,7 @@ namespace SQLiScanner.Modules
         //LỌC TÌM THẺ <FORM>
         // Lưu ý: hàm ExtractForm sẽ kiểm tra Url có tham số Query
         // Dù là lấy thẻ Form nhưng nếu link đang xét lại tồn tại tham số Query thì cũng xét luôn
-        private void ExtractForms(string currentUrl, HtmlDocument doc, List<CrawlResult> results)
+        private void ExtractForms(string currentUrl, HtmlDocument doc, List<CrawlResult> results, string currentCookies)
         {
             var formNodes = doc.DocumentNode.SelectNodes("//form");
             if (formNodes == null) return;
@@ -233,7 +234,8 @@ namespace SQLiScanner.Modules
                                 HttpMethod = "GET",
                                 IsForm = true,
                                 Params = formParams,
-                                RawQueryString = string.Join("&", queryList)
+                                RawQueryString = string.Join("&", queryList),
+                                OriginalCookie = currentCookies
                             });
                             Console.WriteLine($"    [->] Queueing: [FORM-GET] {resultUrl}");
                         }
@@ -245,7 +247,8 @@ namespace SQLiScanner.Modules
                                 HttpMethod = "POST",
                                 IsForm = true,
                                 Params = formParams,      // Sạch sẽ, không chứa rác từ thanh URL
-                                RawQueryString = rawQuery // Giữ lại nguyên vẹn cấu hình lai "RetURL=..." ở đây
+                                RawQueryString = rawQuery, // Giữ lại nguyên vẹn cấu hình lai "RetURL=..." ở đây
+                                OriginalCookie = currentCookies
                             });
 
                             Console.WriteLine($"    [->] Queueing: [FORM-POST] {cleanUrl} (Query: {rawQuery} | Body Inputs: {string.Join(", ", formParams.Keys)})");
@@ -258,7 +261,8 @@ namespace SQLiScanner.Modules
             string rootUrl,
             string currentUrl,
             HtmlDocument doc,
-            List<CrawlResult> results)
+            List<CrawlResult> results,
+            string currentCookies)
         {
             var scriptNodes = doc.DocumentNode.SelectNodes("//script");
             if (scriptNodes == null) return;
@@ -284,7 +288,7 @@ namespace SQLiScanner.Modules
                 }
 
                 if (string.IsNullOrWhiteSpace(jsContent)) continue;
-                ParseJsForEndpoints(rootUrl, currentUrl, jsContent, results);
+                ParseJsForEndpoints(rootUrl, currentUrl, jsContent, results, currentCookies);
             }
         }
 
@@ -292,7 +296,8 @@ namespace SQLiScanner.Modules
             string rootUrl,
             string currentUrl,
             string jsContent,
-            List<CrawlResult> results)
+            List<CrawlResult> results,
+            string currentCookies)
         {
             // Pattern GET: cover XMLHttpRequest, fetch(), axios, string literal có query
             var getPatterns = new[]
@@ -347,11 +352,12 @@ namespace SQLiScanner.Modules
 
                         results.Add(new CrawlResult
                         {
-                            BaseUrl = fullUrl,
+                            BaseUrl = cleanUrl,
                             HttpMethod = "GET",
                             IsForm = false,
                             Params = validParams,
-                            RawQueryString = rawQuery
+                            RawQueryString = rawQuery,
+                            OriginalCookie = currentCookies
                         });
                         Console.WriteLine($"    [+] JS-GET endpoint: {cleanUrl} (Query: {rawQuery})");
                     }
@@ -370,7 +376,7 @@ namespace SQLiScanner.Modules
                     string cleanUrl = fullUrl.Split('?')[0];
                     string rawQuery = fullUrl.Contains("?") ? fullUrl.Split('?')[1] : string.Empty;
 
-                    // Cố gắng tìm send() gần nhất để extract params
+                    // Cố gắng tìm send() gần nhất để extract params                                       
                     // VD: httpreq.send('id='+which) -> tìm thấy param "id"
                     var sendMatch = Regex.Match(jsContent,
                         @"\.send\s*\(\s*['""]([^'""]+)['""]\s*\)");
@@ -403,7 +409,8 @@ namespace SQLiScanner.Modules
                         HttpMethod = "POST",
                         IsForm = false,
                         Params = validParams,
-                        RawQueryString = rawQuery
+                        RawQueryString = rawQuery,
+                        OriginalCookie = currentCookies
                     });
                     Console.WriteLine($"    [+] JS-POST endpoint: {fullUrl} (Params: {string.Join(", ", paramsDict.Keys)})");
                 }

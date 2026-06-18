@@ -47,61 +47,74 @@ namespace SQLiScanner
             AnsiConsole.MarkupLine($"[bold blue][/] Đang bắt đầu quét tại: [underline]{url}[/] (Độ sâu: {maxDepth})");
 
             // Crawler tìm mục tiêu
-            List<CrawlResult> targets = await _crawler.CrawlAsync(url, maxDepth);
-            if (targets.Count == 0)
-            {
-                Console.WriteLine("[-] Không tìm thấy URL tiềm năng.");
-                return;
-            }
+            //List<CrawlResult> targets = await _crawler.CrawlAsync(url, maxDepth);
+            //if (targets.Count == 0)
+            //{
+            //    Console.WriteLine("[-] Không tìm thấy URL tiềm năng.");
+            //    return;
+            //}
 
             List<CrawlResult> targetsDemo = new()
             {
-                new()
-                {
-                    BaseUrl = "http://testasp.vulnweb.com/Login.asp",
-                    HttpMethod = "GET",
-                    IsForm = false,
-                    Params = new()
-                    {
-                        { "RetURL", "/Default.asp?" }
-                    },
-                    RawQueryString = "RetURL=%2FDefault.asp%3F"
-                },
+                //new()
+                //{
+                //    BaseUrl = "http://testasp.vulnweb.com/Login.asp",
+                //    HttpMethod = "GET",
+                //    IsForm = false,
+                //    Params = new()
+                //    {
+                //        { "RetURL", "/Default.asp?" }
+                //    },
+                //    RawQueryString = "RetURL=%2FDefault.asp%3F"
+                //},
+
+                //new()
+                //{
+                //    BaseUrl = "http://testasp.vulnweb.com/Register.asp",
+                //    HttpMethod = "GET",
+                //    IsForm = false,
+                //    Params = new()
+                //    {
+                //        { "RetURL", "/Default.asp?" }
+                //    },
+                //    RawQueryString = "RetURL=%2FDefault.asp%3F"
+                //},
+                //new()
+                //{
+                //    BaseUrl = "http://testasp.vulnweb.com/Login.asp",
+                //    HttpMethod = "POST",
+                //    IsForm = true,
+                //    Params = new()
+                //    {
+                //        { "tfUName", "admin" },
+                //        { "tfUPass", "Admin@123"}
+                //    },
+                //    RawQueryString = "RetURL=%2FDefault.asp%3F"
+                //},
+
+                //new()
+                //{
+                //    BaseUrl = "http://testasp.vulnweb.com/showforum.asp",
+                //    HttpMethod = "GET",
+                //    IsForm = false,
+                //    Params = new()
+                //    {
+                //        { "id", "0" }
+                //    },
+                //    RawQueryString = "id=0"
+                //},
 
                 new()
                 {
-                    BaseUrl = "http://testasp.vulnweb.com/Register.asp",
+                    BaseUrl = "https://gamdie.com/",
                     HttpMethod = "GET",
-                    IsForm = false,
-                    Params = new()
-                    {
-                        { "RetURL", "/Default.asp?" }
-                    },
-                    RawQueryString = "RetURL=%2FDefault.asp%3F"
-                },
-                new()
-                {
-                    BaseUrl = "http://testasp.vulnweb.com/Login.asp",
-                    HttpMethod = "POST",
                     IsForm = true,
+                    OriginalCookie = "",
                     Params = new()
                     {
-                        { "tfUName", "admin" },
-                        { "tfUPass", "Admin@123"}
+                        { "s", "TEST" }
                     },
-                    RawQueryString = "RetURL=%2FDefault.asp%3F"
-                },
-
-                new()
-                {
-                    BaseUrl = "http://testasp.vulnweb.com/showforum.asp",
-                    HttpMethod = "GET",
-                    IsForm = false,
-                    Params = new()
-                    {
-                        { "id", "0" }
-                    },
-                    RawQueryString = "id=0"
+                    RawQueryString = "s=TEST"
                 },
             };
             Console.WriteLine();
@@ -123,6 +136,8 @@ namespace SQLiScanner
                                     && !r.IsExploitable).ToList();
                     foreach (var result in targetResults)
                     {
+                        // TẠM THỜI ĐỂ ĐÂY ĐỂ TRÁNH CỐ GẮNG SỬ DỤNG PAYLOAD ĐỂ TÌM CỘT NẾU BỊ REFLECTED
+                        if (result.IsReflected) continue;
                         if (scanConfig.Token.IsCancellationRequested) break;
                         PayloadState? vulnerableState = sharedTrackingStates.FirstOrDefault(t =>
                             t.TargetUrl == result.VulnerableURL &&

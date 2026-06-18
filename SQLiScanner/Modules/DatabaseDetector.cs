@@ -112,7 +112,8 @@ namespace SQLiScanner.Modules
                         VulnerableParam = paramName,
                         WorkingPrefix = string.Empty,
                         WorkingSuffix = string.Empty,
-                        IsCookieBypass = heuristicResult.IsCookiePriority
+                        IsCookieBypass = heuristicResult.IsCookiePriority,
+                        IsReflected = heuristicResult.IsReflected
                     };
 
                     config.DetectionResults.Add(xssResult);
@@ -165,7 +166,9 @@ namespace SQLiScanner.Modules
                                 bool isErrorBasedSuccess = await CheckErrorBasedPayload(
                                     target, prefix, suffix, payload, payloads.ErrorResponsePattern,
                                     currentState, heuristicResult.IsReflected,
-                                    heuristicResult.Route, config.Token
+                                    heuristicResult.Route,
+                                    expectedResult: "19998",
+                                    config.Token
                                 );
 
                                 if (isErrorBasedSuccess)
@@ -181,7 +184,8 @@ namespace SQLiScanner.Modules
                                         VulnerableParam = paramName,
                                         WorkingPrefix = prefix,
                                         WorkingSuffix = suffix,
-                                        IsCookieBypass = heuristicResult.IsCookiePriority
+                                        IsCookieBypass = heuristicResult.IsCookiePriority,
+                                        IsReflected = heuristicResult.IsReflected
                                     };
 
                                     Logger.Success($"PHÁT HIỆN {result.DatabaseType} THÔNG QUA THÔNG BÁO LỖI!");
@@ -189,6 +193,9 @@ namespace SQLiScanner.Modules
 
                                     if (config.ExitOnFirstHit) break;
                                 }
+                                if (currentState.Status != ScanStatus.Safe)
+                                    if (currentState.Status != ScanStatus.Error)
+                                        currentState.UpdateStatus(ScanStatus.Safe, "Phản hồi từ đối tượng không chứa các từ khóa cần tìm");
                                 stateIndex++;
                             }
                         }
@@ -248,13 +255,17 @@ namespace SQLiScanner.Modules
                                         VulnerableParam = paramName,
                                         WorkingPrefix = prefix,
                                         WorkingSuffix = suffix,
-                                        IsCookieBypass = heuristicResult.IsCookiePriority
+                                        IsCookieBypass = heuristicResult.IsCookiePriority,
+                                        IsReflected = heuristicResult.IsReflected
                                     };
                                     Logger.Success($"PHÁT HIỆN {result.DatabaseType} THÔNG QUA Boolean-Based!");
                                     config.DetectionResults.Add(result);
 
                                     if (config.ExitOnFirstHit) break;
                                 }
+                                if (currentState.Status != ScanStatus.Safe) 
+                                    if (currentState.Status != ScanStatus.Error)
+                                        currentState.UpdateStatus(ScanStatus.Safe, "Payload không có tác dụng");
                                 stateIndex++;
                             }
                         }
@@ -308,13 +319,17 @@ namespace SQLiScanner.Modules
                                         VulnerableParam = paramName,
                                         WorkingPrefix = prefix,
                                         WorkingSuffix = suffix,
-                                        IsCookieBypass = heuristicResult.IsCookiePriority
+                                        IsCookieBypass = heuristicResult.IsCookiePriority,
+                                        IsReflected = heuristicResult.IsReflected
                                     };
                                     Logger.Success($"PHÁT HIỆN {result.DatabaseType} THÔNG QUA TIME-BASED!");
                                     config.DetectionResults.Add(result);
 
                                     if (config.ExitOnFirstHit) break;
                                 }
+                                if (currentState.Status != ScanStatus.Safe) 
+                                    if (currentState.Status != ScanStatus.Error)
+                                        currentState.UpdateStatus(ScanStatus.Safe, "Payload Time-based không hoạt động");
                                 stateIndex++;
                             }
                         }
@@ -413,24 +428,27 @@ namespace SQLiScanner.Modules
                     request.Headers.Add("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64)");
                 }
 
+                string baseSessionCookie = target.OriginalCookie;
+
                 if (route.Type == RouteType.Cookie)
                 {
                     var cookieBuilder = new StringBuilder();
                     cookieBuilder.Append(route.TargetKey).Append('=').Append(payload);
 
-                    if (request.Headers.Contains("Cookie"))
+                    if (!string.IsNullOrEmpty(baseSessionCookie))
                     {
-                        var existingCookies = request.Headers.GetValues("Cookie");
-                        foreach (var cookie in existingCookies)
-                        {
-                            cookieBuilder.Append("; ").Append(cookie);
-                        }
-                        request.Headers.Remove("Cookie");
+                        cookieBuilder.Append("; ").Append(baseSessionCookie);
                     }
 
                     request.Headers.Add("Cookie", cookieBuilder.ToString());
                 }
-
+                else
+                {
+                    if (!string.IsNullOrEmpty(baseSessionCookie))
+                    {
+                        request.Headers.Add("Cookie", baseSessionCookie);
+                    }
+                }
                 using var response = await _client.SendAsync(request, HttpCompletionOption.ResponseContentRead, cancellationToken);
                 var bytes = await response.Content.ReadAsByteArrayAsync(cancellationToken);
                 var charset = response.Content.Headers.ContentType?.CharSet;
@@ -460,6 +478,7 @@ namespace SQLiScanner.Modules
             PayloadState currentState,
             bool isReflected,
             InjectionRoute route,
+            string expectedResult = null,
             CancellationToken cancellationToken = default
         )
         {
@@ -475,12 +494,6 @@ namespace SQLiScanner.Modules
                 return false;
             }
 
-            // Lọc html trường hợp nhiễu dữ liệu khi payload trả về giao diện thay vì chạy về máy chủ
-            if (isReflected)
-            {
-                html = ReflectionDetector.RemovePayloadFromText(html, fullPayload);
-            }
-
             if (!string.IsNullOrEmpty(errorResponseRegex))
             {
                 try
@@ -489,19 +502,38 @@ namespace SQLiScanner.Modules
                     if (match.Success)
                     {
                         string extractedData = match.Groups["result"].Value;
-                        extractedData = WebUtility.UrlDecode(extractedData);
+                        extractedData = WebUtility.UrlDecode(extractedData).Trim();
 
                         // Nếu nội dung thấy được chứa các câu query thì payload không hoạt động mà chỉ bị trả về
-                        if (extractedData.Contains("SELECT", StringComparison.OrdinalIgnoreCase) ||
-                            extractedData.Contains("qXXq", StringComparison.OrdinalIgnoreCase) ||
-                            extractedData.Contains("EXTRACTVALUE", StringComparison.OrdinalIgnoreCase))
+                        if (expectedResult != null)
                         {
-                            Logger.Warning("Regex tóm nhầm dữ liệu Reflected (Bypass thành công bằng Oracle Validation).");
+                            if (extractedData == expectedResult)
+                            {
+                                Logger.Success($"Xác thực thành công bằng toán học! Kỳ vọng: {expectedResult} | Thực tế nhận được: {extractedData}");
+                                return true;
+                            }
+                            else
+                            {
+                                Logger.Warning($"Cảnh báo nhiễu Reflected: Nhận được '{extractedData}' nhưng kỳ vọng kết quả phép tính '{expectedResult}'.");
+                                currentState.UpdateStatus(ScanStatus.Safe, "Bị nhiểu Reflected, đối tượng có khả năng bị XSS");
+                                return false;
+                            }
                         }
                         else
                         {
-                            Logger.Success($"[+] Error-Based thành công! Đã trích xuất được data thật: {extractedData}");
-                            return true;
+                            if (extractedData.Contains("SELECT", StringComparison.OrdinalIgnoreCase) ||
+                                extractedData.Contains("qXXq", StringComparison.OrdinalIgnoreCase) ||
+                                extractedData.Contains("EXTRACTVALUE", StringComparison.OrdinalIgnoreCase))
+                            {
+                                Logger.Warning("Regex tóm nhầm dữ liệu Reflected (Do chứa nguyên văn từ khóa chưa biên dịch).");
+                                currentState.UpdateStatus(ScanStatus.Safe, "Bị nhiểu Reflected, đối tượng có khả năng bị XSS");
+                                return false;
+                            }
+                            else
+                            {
+                                Logger.Success($"Trích xuất dữ liệu thành công! Data: {extractedData}");
+                                return true;
+                            }
                         }
                     }
                 }
@@ -510,8 +542,6 @@ namespace SQLiScanner.Modules
                     Logger.Warning($"Lỗi phân tích Regex Error-Based: {ex.Message}");
                 }
             }
-
-            currentState.UpdateStatus(ScanStatus.Safe, "Phản hồi từ đối tượng không chứa các từ khóa cần tìm");
             return false;
         }
 
@@ -564,21 +594,6 @@ namespace SQLiScanner.Modules
                 return true;
             }
 
-            if (isReflected)
-            {
-                var parser = new HtmlParser();
-
-                // Gọt sạch HTML True
-                var docTrue = parser.ParseDocument(htmlTrue!);
-                DomSanitizer.CleanReflectedNodes(docTrue, fullPayloadTrue);
-                htmlTrue = docTrue.ToHtml();
-
-                // Gọt sạch HTML False
-                var docFalse = parser.ParseDocument(htmlFalse!);
-                DomSanitizer.CleanReflectedNodes(docFalse, fullPayloadFalse);
-                htmlFalse = docFalse.ToHtml();
-            }
-
             string textTrue = ExtractPlainText(htmlTrue!);
             string textFalse = ExtractPlainText(htmlFalse!);
             var similarityState = EvaluateSimilarity(textTrue, textFalse, bytesTrue.Length, bytesFalse.Length, 0.05, 0.20);
@@ -586,7 +601,6 @@ namespace SQLiScanner.Modules
             if (similarityState == SimilarityResult.Similar)
             {
                 Logger.Warning($"Phát hiện sự trùng nhau ở dung lượng cả 2. True({bytesTrue.Length}) ~ False({bytesFalse.Length})");
-                currentState.UpdateStatus(ScanStatus.Safe, "Payload không có tác dụng");
                 return false;
             }
 
@@ -625,7 +639,8 @@ namespace SQLiScanner.Modules
                                     VulnerableParam = route.TargetKey,
                                     WorkingPrefix = prefix,
                                     WorkingSuffix = suffix,
-                                    IsCookieBypass = (route.Type == RouteType.Cookie)
+                                    IsCookieBypass = (route.Type == RouteType.Cookie),
+                                    IsReflected = isReflected
                                 };
                                 config.DetectionResults.Add(result);
                             }

@@ -19,6 +19,7 @@ namespace SQLiScanner.Models
         public bool IsExploitable { get; set; } = false;
 
         public bool IsCookieBypass { get; set; } = false;
+        public bool IsReflected { get; set; } = false;
 
         public bool IsVulnerable => DatabaseType != DatabaseType.Unknow || 
                     (FoundContext != null && FoundContext.Equals("XSS", StringComparison.OrdinalIgnoreCase));

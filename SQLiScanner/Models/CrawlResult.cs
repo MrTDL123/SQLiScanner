@@ -12,7 +12,7 @@ namespace SQLiScanner.Models
         public string HttpMethod { get; set; }
         public bool IsForm { get; set; }
         public Dictionary<string, string> Params { get; set; } = new();
-
+        public string OriginalCookie { get; set; } = string.Empty;
         public string RawQueryString { get; set; } = string.Empty;
         public string FullUrl
         {
