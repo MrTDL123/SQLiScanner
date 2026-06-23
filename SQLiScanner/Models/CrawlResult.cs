@@ -14,6 +14,7 @@ namespace SQLiScanner.Models
         public Dictionary<string, string> Params { get; set; } = new();
         public string OriginalCookie { get; set; } = string.Empty;
         public string RawQueryString { get; set; } = string.Empty;
+        public double PageTolerance { get; set; } = 0.05;
         public string FullUrl
         {
             get

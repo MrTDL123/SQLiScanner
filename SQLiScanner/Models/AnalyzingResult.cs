@@ -6,10 +6,11 @@ using SQLiScanner.Models.Enums;
 
 namespace SQLiScanner.Models
 {
-    public class DetectionResult
+    public class AnalyzingResult
     {
+        public InjectionRoute Route { get; set; } = new InjectionRoute();
+        public string VulnerableParam => Route.TargetKey;
         public string VulnerableURL { get; set; }
-        public string VulnerableParam { get; set; }
         public string HttpMethod { get; set; }
         public string FoundContext { get; set; }
         public DatabaseType DatabaseType { get; set; } = DatabaseType.Unknow;
@@ -17,9 +18,8 @@ namespace SQLiScanner.Models
         public string WorkingSuffix { get; set; }
         public string ErrorMessage { get; set; }
         public bool IsExploitable { get; set; } = false;
-
-        public bool IsCookieBypass { get; set; } = false;
         public bool IsReflected { get; set; } = false;
+        public bool IsCookieBypass => Route.Type == RouteType.Cookie;
 
         public bool IsVulnerable => DatabaseType != DatabaseType.Unknow || 
                     (FoundContext != null && FoundContext.Equals("XSS", StringComparison.OrdinalIgnoreCase));

@@ -46,7 +46,7 @@ namespace SQLiScanner
             };
             AnsiConsole.MarkupLine($"[bold blue][/] Đang bắt đầu quét tại: [underline]{url}[/] (Độ sâu: {maxDepth})");
 
-            // Crawler tìm mục tiêu
+            //Crawler tìm mục tiêu
             //List<CrawlResult> targets = await _crawler.CrawlAsync(url, maxDepth);
             //if (targets.Count == 0)
             //{
@@ -56,53 +56,53 @@ namespace SQLiScanner
 
             List<CrawlResult> targetsDemo = new()
             {
-                //new()
-                //{
-                //    BaseUrl = "http://testasp.vulnweb.com/Login.asp",
-                //    HttpMethod = "GET",
-                //    IsForm = false,
-                //    Params = new()
-                //    {
-                //        { "RetURL", "/Default.asp?" }
-                //    },
-                //    RawQueryString = "RetURL=%2FDefault.asp%3F"
-                //},
+                new()
+                {
+                    BaseUrl = "http://testasp.vulnweb.com/Login.asp",
+                    HttpMethod = "GET",
+                    IsForm = false,
+                    Params = new()
+                    {
+                        { "RetURL", "/Default.asp?" }
+                    },
+                    RawQueryString = "RetURL=%2FDefault.asp%3F"
+                },
 
-                //new()
-                //{
-                //    BaseUrl = "http://testasp.vulnweb.com/Register.asp",
-                //    HttpMethod = "GET",
-                //    IsForm = false,
-                //    Params = new()
-                //    {
-                //        { "RetURL", "/Default.asp?" }
-                //    },
-                //    RawQueryString = "RetURL=%2FDefault.asp%3F"
-                //},
-                //new()
-                //{
-                //    BaseUrl = "http://testasp.vulnweb.com/Login.asp",
-                //    HttpMethod = "POST",
-                //    IsForm = true,
-                //    Params = new()
-                //    {
-                //        { "tfUName", "admin" },
-                //        { "tfUPass", "Admin@123"}
-                //    },
-                //    RawQueryString = "RetURL=%2FDefault.asp%3F"
-                //},
+                new()
+                {
+                    BaseUrl = "http://testasp.vulnweb.com/Register.asp",
+                    HttpMethod = "GET",
+                    IsForm = false,
+                    Params = new()
+                    {
+                        { "RetURL", "/Default.asp?" }
+                    },
+                    RawQueryString = "RetURL=%2FDefault.asp%3F"
+                },
+                new()
+                {
+                    BaseUrl = "http://testasp.vulnweb.com/Login.asp",
+                    HttpMethod = "POST",
+                    IsForm = true,
+                    Params = new()
+                    {
+                        { "tfUName", "admin" },
+                        { "tfUPass", "Admin@123"}
+                    },
+                    RawQueryString = "RetURL=%2FDefault.asp%3F"
+                },
 
-                //new()
-                //{
-                //    BaseUrl = "http://testasp.vulnweb.com/showforum.asp",
-                //    HttpMethod = "GET",
-                //    IsForm = false,
-                //    Params = new()
-                //    {
-                //        { "id", "0" }
-                //    },
-                //    RawQueryString = "id=0"
-                //},
+                new()
+                {
+                    BaseUrl = "http://testasp.vulnweb.com/showforum.asp",
+                    HttpMethod = "GET",
+                    IsForm = false,
+                    Params = new()
+                    {
+                        { "id", "0" }
+                    },
+                    RawQueryString = "id=0"
+                },
 
                 new()
                 {
@@ -115,6 +115,38 @@ namespace SQLiScanner
                         { "s", "TEST" }
                     },
                     RawQueryString = "s=TEST"
+                },
+
+                new()
+                {
+                    BaseUrl = "https://www.ovagames.com/",
+                    HttpMethod = "GET",
+                    IsForm = true,
+                    OriginalCookie = "",
+                    Params = new()
+                    {
+                        { "s", "TEST" }
+                    },
+                    RawQueryString = "s=TEST"
+                },
+
+                new()
+                {
+                    BaseUrl = "https://www.ovagames.com/wp-comments-post.php",
+                    HttpMethod = "POST",
+                    IsForm = true,
+                    OriginalCookie = "",
+                    Params = new()
+                    {
+                        { "bde9744e33", "TEST" },
+                        { "comment", "TEST" },
+                        { "author", "TEST" },
+                        { "email", "test@test.com" },
+                        { "url", "http://test.com" },
+                        { "comment_post_ID", "169732" },
+                        { "comment_parent", "0" },
+                    },
+                    RawQueryString = ""
                 },
             };
             Console.WriteLine();
@@ -130,7 +162,7 @@ namespace SQLiScanner
                     if (scanConfig.Token.IsCancellationRequested) break;
                     await _dbDetector.DetectAsync(target, sharedTrackingStates, scanConfig);
 
-                    List<DetectionResult> targetResults = scanConfig.DetectionResults
+                    List<AnalyzingResult> targetResults = scanConfig.DetectionResults
                         .Where(r => r.VulnerableURL == target.FullUrl
                                     && r.HttpMethod == target.HttpMethod
                                     && !r.IsExploitable).ToList();

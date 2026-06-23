@@ -1,19 +1,20 @@
 ﻿using AngleSharp;
 using AngleSharp.Dom;
+using AngleSharp.Html.Forms;
 using AngleSharp.Html.Parser;
 using AngleSharp.Io;
 using DataSchema;
 using SQLiScanner.Models;
 using SQLiScanner.Models.Enums;
+using SQLiScanner.Services;
+using SQLiScanner.Utilities;
 using SQLiScanner.Utility;
 using System.Data;
 using System.Diagnostics;
 using System.Net;
-using System.Text;
 using System.Net.Http;
+using System.Text;
 using System.Text.RegularExpressions;
-using SQLiScanner.Utilities;
-using AngleSharp.Html.Forms;
 namespace SQLiScanner.Modules
 {
 
@@ -26,18 +27,18 @@ namespace SQLiScanner.Modules
     // Mảng phục vụ duy nhất hàm GetContextForAI
     public class DatabaseDetector
     {
-        private readonly HttpClient _client;
+        private readonly IRequestDispatcher _requestService;
         private readonly AiConcurrencyEngine _aiConcurrencyEngine;
         private readonly ContextAnalyzer _contextAnalyzer;
         private static readonly string[] CriticalKeywords = { "error", "exception", "syntax", "sql", "500", "warning", "denied", "invalid", "server" };
 
         private bool IsTesting = true;
         public DatabaseDetector(
-            HttpClient client,
+            IRequestDispatcher requestService,
             ContextAnalyzer contextAnalyzer,
             AiConcurrencyEngine aiConcurrencyEngine)
         {
-            _client = client;
+            _requestService = requestService; 
             _contextAnalyzer = contextAnalyzer;
             _aiConcurrencyEngine = aiConcurrencyEngine;
         }
@@ -103,16 +104,15 @@ namespace SQLiScanner.Modules
                 {
                     Logger.Warning($"[+] DANGEROUS: Phát hiện lỗ hổng Reflected XSS tại tham số [{paramName}]!");
                     heuristicState.UpdateStatus(ScanStatus.Vulnerable, $"Phát hiện rò rĩ dữ liệu (XSS) tại tham số [{paramName}]");
-                    DetectionResult xssResult = new DetectionResult
+                    AnalyzingResult xssResult = new AnalyzingResult
                     {
+                        Route = heuristicResult.Route,
                         HttpMethod = target.HttpMethod,
                         VulnerableURL = target.FullUrl,
                         FoundContext = "XSS",
                         DatabaseType = DatabaseType.Unknow,
-                        VulnerableParam = paramName,
                         WorkingPrefix = string.Empty,
                         WorkingSuffix = string.Empty,
-                        IsCookieBypass = heuristicResult.IsCookiePriority,
                         IsReflected = heuristicResult.IsReflected
                     };
 
@@ -131,6 +131,14 @@ namespace SQLiScanner.Modules
                     if (ShouldStopCurrentTarget()) break;
                     string prefix = boundary.Prefix;
                     string suffix = boundary.Suffix;
+
+                    string boundaryKey = config.GetBoundaryKey(target.BaseUrl, target.HttpMethod, paramName);
+                    if (config.BoundaryMap.TryGetValue(boundaryKey, out var lockedBoundary))
+                    {
+                        if (prefix != lockedBoundary.Prefix || suffix != lockedBoundary.Suffix)
+                            continue;
+                    }
+
                     Logger.Info($"\nXét Boundary: Prefix [{prefix}] | Suffix [{suffix}]");
 
                     // CỜ KIỂM SOÁT NGẮT SỚM CHO THAM SỐ HIỆN TẠI
@@ -175,16 +183,18 @@ namespace SQLiScanner.Modules
                                 {
                                     isCurrentParamVulnerable = true;
                                     currentState.UpdateStatus(ScanStatus.Vulnerable, $"Phát hiện {payloads.DBMS} (Error-based)");
-                                    DetectionResult result = new DetectionResult
+
+                                    config.BoundaryMap.TryAdd(boundaryKey, (prefix, suffix));
+
+                                    AnalyzingResult result = new AnalyzingResult
                                     {
+                                        Route = heuristicResult.Route,
                                         HttpMethod = target.HttpMethod,
                                         VulnerableURL = target.FullUrl,
                                         FoundContext = "ERROR-BASED",
                                         DatabaseType = GetDbTypeFromString(payloads.DBMS),
-                                        VulnerableParam = paramName,
                                         WorkingPrefix = prefix,
                                         WorkingSuffix = suffix,
-                                        IsCookieBypass = heuristicResult.IsCookiePriority,
                                         IsReflected = heuristicResult.IsReflected
                                     };
 
@@ -246,16 +256,17 @@ namespace SQLiScanner.Modules
                                     isCurrentParamVulnerable = true;
                                     currentState.UpdateStatus(ScanStatus.Vulnerable, $"Phát hiện {payloads.DBMS} (Boolean-based)");
 
-                                    DetectionResult result = new DetectionResult
+                                    config.BoundaryMap.TryAdd(boundaryKey, (prefix, suffix));
+
+                                    AnalyzingResult result = new AnalyzingResult
                                     {
+                                        Route = heuristicResult.Route,
                                         HttpMethod = target.HttpMethod,
                                         VulnerableURL = target.FullUrl,
                                         FoundContext = "BOOLEAN-BASED",
                                         DatabaseType = GetDbTypeFromString(payloads.DBMS),
-                                        VulnerableParam = paramName,
                                         WorkingPrefix = prefix,
                                         WorkingSuffix = suffix,
-                                        IsCookieBypass = heuristicResult.IsCookiePriority,
                                         IsReflected = heuristicResult.IsReflected
                                     };
                                     Logger.Success($"PHÁT HIỆN {result.DatabaseType} THÔNG QUA Boolean-Based!");
@@ -310,16 +321,18 @@ namespace SQLiScanner.Modules
                                 {
                                     isCurrentParamVulnerable = true;
                                     currentState.UpdateStatus(ScanStatus.Vulnerable, $"Phát hiện {payloads.DBMS} (Time-based)");
-                                    DetectionResult result = new DetectionResult
+
+                                    config.BoundaryMap.TryAdd(boundaryKey, (prefix, suffix));
+
+                                    AnalyzingResult result = new AnalyzingResult
                                     {
+                                        Route = heuristicResult.Route,
                                         HttpMethod = target.HttpMethod,
                                         VulnerableURL = target.FullUrl,
                                         FoundContext = "TIME-BASED",
                                         DatabaseType = GetDbTypeFromString(payloads.DBMS),
-                                        VulnerableParam = paramName,
                                         WorkingPrefix = prefix,
                                         WorkingSuffix = suffix,
-                                        IsCookieBypass = heuristicResult.IsCookiePriority,
                                         IsReflected = heuristicResult.IsReflected
                                     };
                                     Logger.Success($"PHÁT HIỆN {result.DatabaseType} THÔNG QUA TIME-BASED!");
@@ -358,7 +371,7 @@ namespace SQLiScanner.Modules
             try
             {
                 sw.Start();
-                var (_, _, statusCode, _) = await SendRequestAsync(target, payload, route, cancellationToken);
+                var (_, _, statusCode, _, _) = await _requestService.RequestAsync(target, payload, route, cancellationToken);
                 sw.Stop();
 
                 return (true, sw.ElapsedMilliseconds, statusCode);
@@ -374,98 +387,6 @@ namespace SQLiScanner.Modules
             {
                 sw.Stop();
                 return (false, sw.ElapsedMilliseconds, 0);
-            }
-        }
-        private async Task<(string? html, byte[]? bytes, int statusCode, string finalUrl)> SendRequestAsync(
-            CrawlResult target, string payload, InjectionRoute route, CancellationToken cancellationToken = default)
-        {
-            try
-            {
-                var method = new System.Net.Http.HttpMethod(target.HttpMethod.ToUpper());
-                HttpRequestMessage request;
-
-                var queryParams = System.Web.HttpUtility.ParseQueryString(target.RawQueryString);
-                var bodyParams = new Dictionary<string, string>(target.Params);
-
-                // Kiểm tra liệu có phải đang chèn payload vào tham số query hay đang chèn vào Form
-                bool isQueryParam = target.RawQueryString.Contains($"{route.TargetKey}=") || !target.Params.ContainsKey(route.TargetKey);
-
-                string valueToInject = route.Type switch
-                {
-                    RouteType.Cookie => route.OriginalValue, // Sử dụng Cookie là nơi chứa payload nên giữ nguyên giá trị các tham số query/inputs
-                    _ => payload                             // Ngược lại: Gửi payload trực tiếp qua URL/Body
-                };
-
-                if (isQueryParam)
-                {
-                    queryParams[route.TargetKey] = valueToInject;
-                    bodyParams.Remove(route.TargetKey);
-                }
-                else
-                {
-                    bodyParams[route.TargetKey] = valueToInject;
-                }
-
-                var uriBuilder = new UriBuilder(target.BaseUrl)
-                {
-                    Query = queryParams.ToString()
-                };
-
-                request = new HttpRequestMessage(method, uriBuilder.ToString());
-
-                if (method == System.Net.Http.HttpMethod.Post)
-                {
-                    request.Content = new FormUrlEncodedContent(bodyParams);
-                    Logger.Request(method.ToString(), $"URL Query: {uriBuilder.Query} | Body: {string.Join(", ", bodyParams.Select(kv => $"{kv.Key}=[{kv.Value}]"))}");
-                }
-                else
-                {
-                    Logger.Request(method.ToString(), uriBuilder.ToString());
-                }
-
-                if (!request.Headers.Contains("User-Agent"))
-                {
-                    request.Headers.Add("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64)");
-                }
-
-                string baseSessionCookie = target.OriginalCookie;
-
-                if (route.Type == RouteType.Cookie)
-                {
-                    var cookieBuilder = new StringBuilder();
-                    cookieBuilder.Append(route.TargetKey).Append('=').Append(payload);
-
-                    if (!string.IsNullOrEmpty(baseSessionCookie))
-                    {
-                        cookieBuilder.Append("; ").Append(baseSessionCookie);
-                    }
-
-                    request.Headers.Add("Cookie", cookieBuilder.ToString());
-                }
-                else
-                {
-                    if (!string.IsNullOrEmpty(baseSessionCookie))
-                    {
-                        request.Headers.Add("Cookie", baseSessionCookie);
-                    }
-                }
-                using var response = await _client.SendAsync(request, HttpCompletionOption.ResponseContentRead, cancellationToken);
-                var bytes = await response.Content.ReadAsByteArrayAsync(cancellationToken);
-                var charset = response.Content.Headers.ContentType?.CharSet;
-                var encoding = charset is not null ? Encoding.GetEncoding(charset) : Encoding.UTF8;
-                string? finalUrl = response.RequestMessage.RequestUri.ToString();
-
-                return (encoding.GetString(bytes), bytes, (int)response.StatusCode, finalUrl);
-            }
-            catch (OperationCanceledException)
-            {
-                Logger.Warning("Yêu cầu mạng bị hủy bỏ theo yêu cầu của hệ thống/người dùng.");
-                return (null!, null!, 0, null!);
-            }
-            catch (Exception ex)
-            {
-                Logger.Error($"Gửi Request thất bại: {ex.Message}");
-                return (null!, null!, 0, null!);
             }
         }
 
@@ -486,7 +407,7 @@ namespace SQLiScanner.Modules
             string fullPayload = route.Type == RouteType.Standard
                 ? TamperEngine.ApplyTamper(rawFullPayload)
                 : rawFullPayload;
-            var (html, _, _, _) = await SendRequestAsync(target, fullPayload, route, cancellationToken);
+            var (html, _, _, _, _) = await _requestService.RequestAsync(target, fullPayload, route, cancellationToken);
 
             if (string.IsNullOrEmpty(html))
             {
@@ -565,8 +486,8 @@ namespace SQLiScanner.Modules
                 : rawPayloadFalse;
 
             Logger.Process($"[>] TRUE PayLoad {fullPayloadTrue}");
-            (string? htmlTrue, byte[]? bytesTrue, int statusTrue, string trueFinalUrl) =
-                await SendRequestAsync(target, fullPayloadTrue, route, cancellationToken);
+            (string? htmlTrue, byte[]? bytesTrue, int statusTrue, string trueFinalUrl, _) =
+                await _requestService.RequestAsync(target, fullPayloadTrue, route, cancellationToken);
             if (bytesTrue == null)
             {
                 Logger.Warning("Mất kết nối hoặc bị WAF chặn. Bỏ qua.");
@@ -576,8 +497,8 @@ namespace SQLiScanner.Modules
             Logger.Response(statusTrue, bytesTrue.Length);
 
             Logger.Process($"[>] FALSE Payload {fullPayloadFalse}");
-            (string? htmlFalse, byte[]? bytesFalse, int statusFalse, string falseFinalUrl) =
-                await SendRequestAsync(target, fullPayloadFalse, route, cancellationToken);
+            (string? htmlFalse, byte[]? bytesFalse, int statusFalse, string falseFinalUrl, _) =
+                await _requestService.RequestAsync(target, fullPayloadFalse, route, cancellationToken);
 
             if (bytesFalse == null)
             {
@@ -596,7 +517,13 @@ namespace SQLiScanner.Modules
 
             string textTrue = ExtractPlainText(htmlTrue!);
             string textFalse = ExtractPlainText(htmlFalse!);
-            var similarityState = EvaluateSimilarity(textTrue, textFalse, bytesTrue.Length, bytesFalse.Length, 0.05, 0.20);
+
+            double dynamicThreshold = target.PageTolerance;
+            double greyZoneThreshold = dynamicThreshold + 0.15;
+
+            var similarityState = EvaluateSimilarity(
+                textTrue, textFalse, bytesTrue.Length, bytesFalse.Length,
+                dynamicThreshold, greyZoneThreshold);
 
             if (similarityState == SimilarityResult.Similar)
             {
@@ -630,16 +557,19 @@ namespace SQLiScanner.Modules
                             if (response.IsVulnerable)
                             {
                                 currentState.UpdateStatus(ScanStatus.Vulnerable, $"AI: {response.Reason}");
-                                DetectionResult result = new DetectionResult
+
+                                string boundaryKey = config.GetBoundaryKey(target.BaseUrl, target.HttpMethod, route.TargetKey);
+                                config.BoundaryMap.TryAdd(boundaryKey, (prefix, suffix));
+
+                                AnalyzingResult result = new AnalyzingResult
                                 {
+                                    Route = route,
                                     HttpMethod = target.HttpMethod,
                                     VulnerableURL = target.FullUrl,
                                     FoundContext = "BOOLEAN-BASED",
                                     DatabaseType = GetDbTypeFromString(dbms),
-                                    VulnerableParam = route.TargetKey,
                                     WorkingPrefix = prefix,
                                     WorkingSuffix = suffix,
-                                    IsCookieBypass = (route.Type == RouteType.Cookie),
                                     IsReflected = isReflected
                                 };
                                 config.DetectionResults.Add(result);
@@ -661,8 +591,8 @@ namespace SQLiScanner.Modules
 
             Logger.Process("Đang xác định kịch bản phát hiện...");
             var baselineRoute = InjectionRoute.CreateStandard(route.TargetKey, route.OriginalValue);
-            (string? htmlBase, byte[]? bytesBase, _, _) =
-                await SendRequestAsync(target, route.OriginalValue, baselineRoute, cancellationToken);
+            (string? htmlBase, byte[]? bytesBase, _, _, _) =
+                await _requestService.RequestAsync(target, route.OriginalValue, baselineRoute, cancellationToken);
 
             if (bytesBase == null)
             {
@@ -672,9 +602,9 @@ namespace SQLiScanner.Modules
             string textBase = ExtractPlainText(htmlBase!);
 
             // So sánh Base với True
-            var baseVsTrue = EvaluateSimilarity(textBase, textTrue, bytesBase.Length, bytesTrue.Length, 0.05, 0.20);
+            var baseVsTrue = EvaluateSimilarity(textBase, textTrue, bytesBase.Length, bytesTrue.Length, dynamicThreshold, greyZoneThreshold);
             // So sánh Base với False
-            var baseVsFalse = EvaluateSimilarity(textBase, textFalse, bytesBase.Length, bytesFalse.Length, 0.05, 0.20);
+            var baseVsFalse = EvaluateSimilarity(textBase, textFalse, bytesBase.Length, bytesFalse.Length, dynamicThreshold, greyZoneThreshold);
 
             // Vì đã qua phễu lọc mà vẫn chưa nhận định được vùng xám nên cứ mặc định là giống nhau
             if (baseVsTrue == SimilarityResult.Similar || baseVsTrue == SimilarityResult.GreyZone)

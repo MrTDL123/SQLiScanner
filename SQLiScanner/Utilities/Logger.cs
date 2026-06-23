@@ -144,7 +144,7 @@ namespace SQLiScanner.Utility
                 _indentLevel++;
             }
         }
-        public static void Result(DetectionResult result)
+        public static void Result(AnalyzingResult result)
         {
             if (!IsMuted)
             {
@@ -160,7 +160,7 @@ namespace SQLiScanner.Utility
             }
         }
 
-        public static void SummaryResults(List<DetectionResult> results)
+        public static void SummaryResults(List<AnalyzingResult> results)
         {
             if (!IsMuted)
             {

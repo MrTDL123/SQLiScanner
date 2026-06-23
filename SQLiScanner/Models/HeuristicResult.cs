@@ -1,4 +1,5 @@
-﻿using System;
+﻿using SQLiScanner.Models.Enums;
+using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Text;
@@ -12,8 +13,6 @@ namespace SQLiScanner.Models
         // Giá trị: "INTEGER", "STRING_SINGLE_QUOTE", 
         // "LIKE_SINGLE_QUOTE", "NESTED_PARENTHESIS", "UNKNOWN"
         public string DetectedType { get; set; } = "UNKNOWN";
-
-        public InjectionRoute Route { get; set; } = new InjectionRoute();
 
         // Đại diện độ tương đồng giữa 2 response heuristic 
         // Ví dụ: kiểm tra độ tương đồng giữa tham số id=1234-1 và id=1233
@@ -78,6 +77,7 @@ namespace SQLiScanner.Models
         // Chuỗi ngẫu nhiên để kiểm tra tính rò rỉ dữ liệu
         public string CanaryToken { get; set; } = string.Empty;
         // Cờ đánh dấu ưu tiên chèn payload vào cookie thay vì tham số query hoặc Form Inputs
-        public bool IsCookiePriority { get; set; } = false;
+        public InjectionRoute Route { get; set; } = new InjectionRoute();
+        public bool IsCookiePriority => Route.Type == RouteType.Cookie;
     }
 }

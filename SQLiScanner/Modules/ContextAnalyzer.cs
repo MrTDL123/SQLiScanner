@@ -1,6 +1,7 @@
 ﻿using AngleSharp.Html.Parser;
 using SQLiScanner.Models;
 using SQLiScanner.Models.Enums;
+using SQLiScanner.Services;
 using SQLiScanner.Utilities;
 using SQLiScanner.Utility;
 using System.Net;
@@ -19,7 +20,7 @@ namespace SQLiScanner.Modules
 
     public class ContextAnalyzer
     {
-        private readonly HttpClient _client;
+        private readonly IRequestDispatcher _requestService;
         private readonly string _boundariesXmlPath;
         private readonly string _errorBasedXmlPath;
         private readonly string _booleanBlindXmlPath;
@@ -29,15 +30,15 @@ namespace SQLiScanner.Modules
         public const string INT_PAYLOAD_2 = "1-1";
         public const string INT_PAYLOAD_3 = "2-1";
 
-        public ContextAnalyzer(HttpClient httpClient)
+        public ContextAnalyzer(IRequestDispatcher requestService)
         {
             string baseDir = AppDomain.CurrentDomain.BaseDirectory;
 
-            _client = httpClient;
+            _requestService = requestService;
             _boundariesXmlPath = Path.Combine(baseDir, "Resources", "boundaries.xml");
-            _errorBasedXmlPath = Path.Combine(baseDir, "Resources", "Payloads", "error_based.xml");
-            _booleanBlindXmlPath = Path.Combine(baseDir, "Resources", "Payloads", "boolean_blind.xml");
-            _timeBlindXmlPath = Path.Combine(baseDir, "Resources", "Payloads", "time_blind.xml");
+            _errorBasedXmlPath = Path.Combine(baseDir, "Resources", "AnalyzingPayloads", "error_based.xml");
+            _booleanBlindXmlPath = Path.Combine(baseDir, "Resources", "AnalyzingPayloads", "boolean_blind.xml");
+            _timeBlindXmlPath = Path.Combine(baseDir, "Resources", "AnalyzingPayloads", "time_blind.xml");
         }
 
         public async Task<HeuristicResult> PerformHeuristicScanAsync(
@@ -54,13 +55,40 @@ namespace SQLiScanner.Modules
                 InjectionRoute route = InjectionRoute.CreateStandard(paramName, originalValue);
                 
                 currentState.UpdateStatus(ScanStatus.HeuristicScanning, "Đang tải cấu trúc trang gốc (Baseline)...");
-                var (baseHtml, baseBytes, baseStatus, baseHeaders) = await SendPayloadAsync(target, originalValue, route, cancellationToken);
+                var (baseHtml, baseBytes, baseStatus, _,baseHeaders) = await _requestService.RequestAsync(target, originalValue, route, cancellationToken);
                 if (baseBytes == null)
                 {
                     result.Status = "FAILED";
                     Logger.Warning("Không lấy được Baseline. Target có thể đã sập hoặc WAF chặn.");
                     currentState.UpdateStatus(ScanStatus.Error, "Lỗi: Không lấy được Baseline (WAF/Drop)");
                     return result;
+                }
+
+                currentState.UpdateStatus(ScanStatus.HeuristicScanning, "Đang tự động đo đạc độ nhiễu nền trang (Calibration)...");
+                var (baseHtml2, baseBytes2, baseStatus2, _, _) = await _requestService.RequestAsync(target, originalValue, route, cancellationToken);
+
+                if (baseBytes2 != null)
+                {
+                    double baselineSimilarity = CalculateSimilarity(
+                        baseStatus, baseBytes.Length, baseHtml,
+                        baseStatus2, baseBytes2.Length, baseHtml2
+                    );
+
+                    double backgroundNoise = 1.0 - baselineSimilarity;
+                    target.PageTolerance = backgroundNoise + 0.05;
+
+                    if (backgroundNoise > 0.30)
+                    {
+                        Logger.Warning($"[!] Cảnh báo: Trang web rất hỗn loạn! Độ nhiễu nền đo được: {(backgroundNoise * 100):F1}%. Ngưỡng dung sai động được nâng lên: {(target.PageTolerance * 100):F1}%");
+                    }
+                    else
+                    {
+                        Logger.Info($"[*] Đo đạc độ nhiễu trang thành công: {(backgroundNoise * 100):F2}%. Ngưỡng dung sai động được thiết lập: {(target.PageTolerance * 100):F2}%");
+                    }
+                }
+                else
+                {
+                    target.PageTolerance = 0.05;
                 }
 
                 currentState.UpdateStatus(ScanStatus.HeuristicScanning, "Đang dò cookie thụ động...");
@@ -86,7 +114,7 @@ namespace SQLiScanner.Modules
                 string canary = ReflectionDetector.GenerateCanaryToken();
 
                 currentState.UpdateStatus(ScanStatus.HeuristicScanning, $"Kiểm tra XSS: Gửi token {canary}");
-                var (canaryHtml, canaryBytes, _, _) = await SendPayloadAsync(target, canary, route, cancellationToken);
+                var (canaryHtml, canaryBytes, _, _, _) = await _requestService.RequestAsync(target, canary, route, cancellationToken);
 
                 if (canaryBytes != null)
                 {
@@ -98,8 +126,6 @@ namespace SQLiScanner.Modules
                         currentState.UpdateStatus(ScanStatus.HeuristicScanning, "XSS/Reflected: Phát hiện rò rỉ đầu vào");
                     }
                 }
-
-                result.IsCookiePriority = (route.Type == RouteType.Cookie);
 
                 if (result.IsCookiePriority)
                 {
@@ -298,98 +324,6 @@ namespace SQLiScanner.Modules
             }
         }
 
-        private async Task<(string html, byte[] bytes, int statusCode, HttpResponseHeaders? headers)> SendPayloadAsync(
-            CrawlResult target,
-            string payload,
-            InjectionRoute route, 
-            CancellationToken cancellationToken = default)
-        {
-            try
-            {
-                var method = new HttpMethod(target.HttpMethod.ToUpper());
-                HttpRequestMessage request;
-
-                var queryParams = System.Web.HttpUtility.ParseQueryString(target.RawQueryString);
-                var bodyParams = new Dictionary<string, string>(target.Params);
-
-                bool isQueryParam = target.RawQueryString.Contains($"{route.TargetKey}=") || !target.Params.ContainsKey(route.TargetKey);
-
-                string valueToInject = route.Type switch
-                {
-                    RouteType.Cookie => route.OriginalValue,
-                    _ => payload
-                };
-
-                if (isQueryParam)
-                {
-                    queryParams[route.TargetKey] = valueToInject;
-                    bodyParams.Remove(route.TargetKey);
-                }
-                else
-                {
-                    bodyParams[route.TargetKey] = valueToInject;
-                }
-
-                var uriBuilder = new UriBuilder(target.BaseUrl);
-                uriBuilder.Query = queryParams.ToString();
-
-                request = new HttpRequestMessage(method, uriBuilder.ToString());
-                request.Headers.Add("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64)");
-
-                if (method == HttpMethod.Post)
-                {
-                    request.Content = new FormUrlEncodedContent(bodyParams);
-                    Logger.Request(method.ToString(), $"URL Query: {uriBuilder.Query} | Body: {string.Join(", ", bodyParams.Select(kv => $"{kv.Key}=[{kv.Value}]"))}");
-                }
-                else
-                {
-                    Logger.Request(method.ToString(), uriBuilder.ToString());
-                }
-
-
-                string baseSessionCookie = target.OriginalCookie;
-
-                if (route.Type == RouteType.Cookie)
-                {
-                    var cookieBuilder = new StringBuilder();
-                    cookieBuilder.Append(route.TargetKey).Append('=').Append(payload);
-
-                    // Nối chuỗi các cookie cũ đảm bảo khi gửi không thiếu dữ liệu
-                    if (!string.IsNullOrEmpty(baseSessionCookie))
-                    {
-                        cookieBuilder.Append("; ").Append(baseSessionCookie);
-                    }
-
-                    request.Headers.Add("Cookie", cookieBuilder.ToString());
-                    Logger.Info($"[Routing] Chuyển đổi định tuyến payload: Gửi [{payload}] qua Header Cookie.");
-                }
-                else
-                {
-                    if (!string.IsNullOrEmpty(baseSessionCookie))
-                    {
-                        request.Headers.Add("Cookie", baseSessionCookie);
-                    }
-                }
-
-                using var response = await _client.SendAsync(request, HttpCompletionOption.ResponseContentRead, cancellationToken);
-                var bytes = await response.Content.ReadAsByteArrayAsync(cancellationToken);
-                var charset = response.Content.Headers.ContentType?.CharSet;
-                var encoding = charset is not null ? Encoding.GetEncoding(charset) : Encoding.UTF8;
-
-                return (encoding.GetString(bytes), bytes, (int)response.StatusCode, response.Headers);
-            }
-            catch (OperationCanceledException)
-            {
-                Logger.Warning("Yêu cầu mạng bị hủy bỏ theo yêu cầu của hệ thống/người dùng.");
-                return (null!, null!, 0, null!);
-            }
-            catch (Exception ex)
-            {
-                Logger.Error($"Gửi Request thất bại: {ex.Message}");
-                return (null!, null!, 0, null!);
-            }
-        }
-
         #region Các hàm phụ trợ
         private async Task Phase1_DetectIntegerContextAsync(
             CrawlResult target, HeuristicResult result, PayloadState currentState,
@@ -399,8 +333,8 @@ namespace SQLiScanner.Modules
             // Lấy base response
             Logger.Process("Kiểm tra tham số với giá trị = 1");
             currentState.UpdateStatus(ScanStatus.HeuristicScanning, "Integer Check: Gửi request với tham số = 1...");
-            var (baselineHtml, baselineBytes, baselineStatus, _) =
-                await SendPayloadAsync(target, INT_PAYLOAD_1, route, cancellationToken);
+            var (baselineHtml, baselineBytes, baselineStatus, _, _) =
+                await _requestService.RequestAsync(target, INT_PAYLOAD_1, route, cancellationToken);
             if (baselineBytes == null)
             {
                 result.DetectedType = "UNKNOWN";
@@ -414,8 +348,8 @@ namespace SQLiScanner.Modules
             // Test payloa False
             Logger.Process("Kiểm tra tham số với giá trị = 1-1");
             currentState.UpdateStatus(ScanStatus.HeuristicScanning, "Integer Check: Gửi biểu thức toán học [1-1]...");
-            var (falseHtml, falseBytes, falseStatus, _) =
-                await SendPayloadAsync(target, INT_PAYLOAD_2, route, cancellationToken);
+            var (falseHtml, falseBytes, falseStatus, _, _) =
+                await _requestService.RequestAsync(target, INT_PAYLOAD_2, route, cancellationToken);
 
             if (falseBytes == null)
             {
@@ -430,8 +364,8 @@ namespace SQLiScanner.Modules
             // Test payload 3
             Logger.Process("Kiểm tra tham số với giá trị = 2-1");
             currentState.UpdateStatus(ScanStatus.HeuristicScanning, "Integer Check: Gửi biểu thức toán học [2-1]...");
-            var (trueHtml, trueBytes, trueStatus, _) =
-                await SendPayloadAsync(target, INT_PAYLOAD_3, route, cancellationToken);
+            var (trueHtml, trueBytes, trueStatus, _, _) =
+                await _requestService.RequestAsync(target, INT_PAYLOAD_3, route, cancellationToken);
             if (trueBytes == null)
             {
                 result.DetectedType = "UNKNOWN";
@@ -445,12 +379,14 @@ namespace SQLiScanner.Modules
             // Nếu cả base và payload 2 và 3 đều giống nhau thì tham số là Integer
             double similarityPayloadFalse = CalculateSimilarity(
                 baselineStatus, baselineLength, baselineHtml,
-                falseStatus, falseBytes.Length, falseHtml);
+                falseStatus, falseBytes.Length, falseHtml,
+                target.PageTolerance);
             Logger.Info($"Payload (1-1) giống {(similarityPayloadFalse * 100):F1}% so với Payload (1)");
 
             double similarityPayloadTrue = CalculateSimilarity(
                 baselineStatus, baselineLength, baselineHtml,
-                trueStatus, trueBytes.Length, trueHtml
+                trueStatus, trueBytes.Length, trueHtml,
+                target.PageTolerance
             );
             Logger.Info($"Payload (2-1) giống {similarityPayloadFalse * 100}% so với Payload (1)");
 
@@ -503,8 +439,8 @@ namespace SQLiScanner.Modules
             {
                 Logger.Process($"Chèn payload [{payload}]");
                 currentState.UpdateStatus(ScanStatus.HeuristicScanning, $"String Check: Gửi payload [{payload}] gây lỗi không...");
-                var (testHtml, testBytes, testStatus, _) =
-                    await SendPayloadAsync(target, payload, route, cancellationToken);
+                var (testHtml, testBytes, testStatus, _, _) =
+                    await _requestService.RequestAsync(target, payload, route, cancellationToken);
 
                 if (testBytes == null)
                 {
@@ -516,7 +452,8 @@ namespace SQLiScanner.Modules
 
                 double similarity = CalculateSimilarity(
                     baselineStatus, baselineLength, baselineHtml,
-                    testStatus, testBytes.Length, testHtml
+                    testStatus, testBytes.Length, testHtml,
+                    target.PageTolerance
                 );
                 Logger.Info($"Payload [{payload}] giống {similarity * 100}% so request nguyên bản");
 
@@ -567,7 +504,7 @@ namespace SQLiScanner.Modules
 
                 // TEST FALSE PAYLOAD (Kỳ vọng: Khác Base)
                 Logger.Process("Gửi False Payload...");
-                var (htmlFalse, bytesFalse, statusFalse, _) = await SendPayloadAsync(target, falsePayload, route, cancellationToken);
+                var (htmlFalse, bytesFalse, statusFalse, _, _) = await _requestService.RequestAsync(target, falsePayload, route, cancellationToken);
                 if (bytesFalse == null)
                 {
                     Logger.Warning("Không nhận được phản hồi từ đối tượng. Chuyển sang boundary tiếp theo!");
@@ -578,12 +515,13 @@ namespace SQLiScanner.Modules
 
                 double simFalse = CalculateSimilarity(
                     baselineStatus, baselineLength, baselineHtml,
-                    statusFalse, bytesFalse.Length, htmlFalse);
+                    statusFalse, bytesFalse.Length, htmlFalse,
+                    target.PageTolerance);
                 Logger.Info($"Payload False giống {(simFalse * 100):F1}% so request nguyên bản");
 
                 // TEST TRUE PAYLOAD (Kỳ vọng: Giống Base)
                 Logger.Process("Gửi True Payload...");
-                var (htmlTrue, bytesTrue, statusTrue, _) = await SendPayloadAsync(target, truePayload, route, cancellationToken);
+                var (htmlTrue, bytesTrue, statusTrue, _, _) = await _requestService.RequestAsync(target, truePayload, route, cancellationToken);
                 if (bytesTrue == null)
                 {
                     Logger.Warning("Không nhận được phản hồi từ đối tượng. Chuyển sang boundary tiếp theo!");
@@ -594,7 +532,8 @@ namespace SQLiScanner.Modules
 
                 double simTrue = CalculateSimilarity(
                     baselineStatus, baselineLength, baselineHtml,
-                    statusTrue, bytesTrue.Length, htmlTrue);
+                    statusTrue, bytesTrue.Length, htmlTrue,
+                    target.PageTolerance);
                 Logger.Info($"Payload True giống {simTrue * 100}% so request nguyên bản");
 
                 // Kịch bản 1: True giống Base, False khác Base
@@ -887,7 +826,7 @@ namespace SQLiScanner.Modules
             {
                 if (cancellationToken.IsCancellationRequested) break;
 
-                var (fuzzHtml, fuzzBytes, fuzzStatus, _) = await SendPayloadAsync(
+                var (fuzzHtml, fuzzBytes, fuzzStatus, _, _) = await _requestService.RequestAsync(
                     target,
                     payload: canaryValue,
                     new InjectionRoute(RouteType.Cookie, word, originalValue),
@@ -897,7 +836,8 @@ namespace SQLiScanner.Modules
                 if (fuzzBytes == null) continue;
                 double similarity = CalculateSimilarity(
                     baselineStatus, baselineLength, originalHtml,
-                    fuzzStatus, fuzzBytes.Length, fuzzHtml
+                    fuzzStatus, fuzzBytes.Length, fuzzHtml,
+                    target.PageTolerance
                 );
 
                 bool isReflected = fuzzHtml.Contains(canaryValue, StringComparison.OrdinalIgnoreCase);
@@ -925,7 +865,7 @@ namespace SQLiScanner.Modules
 
             string mutatedValue = int.TryParse(originalValue, out _) ? "999" : "mutated_state_check";
             // Request Baseline (Tham số gốc, không truyền cookie)
-            var (baseHtml, baseBytes, baseStatus, _) = await SendPayloadAsync(
+            var (baseHtml, baseBytes, baseStatus, _, _) = await _requestService.RequestAsync(
                 target, 
                 originalValue,
                 InjectionRoute.CreateStandard(paramName, originalValue),
@@ -934,7 +874,7 @@ namespace SQLiScanner.Modules
             if (baseBytes == null) return InjectionRoute.CreateStandard(paramName, originalValue);
 
             // Request Mutation (Tham số đột biến, không truyền Cookie)
-            var (mutatedHtml, mutatedBytes, mutatedStatus, _) = await SendPayloadAsync(
+            var (mutatedHtml, mutatedBytes, mutatedStatus, _, _) = await _requestService.RequestAsync(
                 target, 
                 mutatedValue,
                 InjectionRoute.CreateStandard(paramName, originalValue),
@@ -943,7 +883,8 @@ namespace SQLiScanner.Modules
 
             double baselineVsMutation = CalculateSimilarity(
                 baseStatus, baseBytes.Length, baseHtml,
-                mutatedStatus, mutatedBytes.Length, mutatedHtml
+                mutatedStatus, mutatedBytes.Length, mutatedHtml,
+                target.PageTolerance
             );
 
             // Nếu không có sự thay đổi thì bỏ qua phân định
@@ -958,7 +899,7 @@ namespace SQLiScanner.Modules
                 if (cancellationToken.IsCancellationRequested) break;
 
                 // Request Conflict (Query/Form giữ nguyên giá trị Gốc, nhưng Cookie truyền giá trị Đột biến)
-                var (conflictHtml, conflictBytes, conflictStatus, _) = await SendPayloadAsync(
+                var (conflictHtml, conflictBytes, conflictStatus, _, _) = await _requestService.RequestAsync(
                     target,
                     payload: mutatedValue,
                     new InjectionRoute(RouteType.Cookie, cookieName, originalValue),
@@ -970,12 +911,14 @@ namespace SQLiScanner.Modules
                 // Kiểm tra việc thay đổi trên cookie có tương ứng với khi payload độc truyền vào tham số query/inputs hay không
                 double conflictVsMutation = CalculateSimilarity(
                     mutatedStatus, mutatedBytes.Length, mutatedHtml,
-                    conflictStatus, conflictBytes.Length, conflictHtml
+                    conflictStatus, conflictBytes.Length, conflictHtml,
+                    target.PageTolerance
                 );
 
                 double conflictVsBaseline = CalculateSimilarity(
                     baseStatus, baseBytes.Length, baseHtml,
-                    conflictStatus, conflictBytes.Length, conflictHtml
+                    conflictStatus, conflictBytes.Length, conflictHtml,
+                    target.PageTolerance
                 );
 
                 // Nếu trang Conflict giống hệt trang Mutation (> 95%) và khác hẳn Baseline (< 90%): 

@@ -15,7 +15,13 @@ namespace SQLiScanner.Models
         // Dùng để phát tìn hiệu hủy (Dành cho Early Exit hoặc thoát thủ công)
         public CancellationTokenSource Cts { get; set; }
         public CancellationToken Token => Cts.Token;
-        public ConcurrentBag<DetectionResult> DetectionResults { get; } = new();
+        public ConcurrentBag<AnalyzingResult> DetectionResults { get; } = new();
+
+        public ConcurrentDictionary<string, (string Prefix, string Suffix)> BoundaryMap { get; } = new();
+        public string GetBoundaryKey(string baseUrl, string httpMethod, string paramName)
+        {
+            return $"{baseUrl}_{httpMethod}_{paramName}".ToLowerInvariant();
+        }
         public ScanConfig(bool exitOnFirstHit)
         {
             ExitOnFirstHit = exitOnFirstHit;

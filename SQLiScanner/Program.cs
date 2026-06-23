@@ -65,6 +65,17 @@ namespace SQLiScanner
                 });
             };
             
+            services.AddHttpClient<IRequestDispatcher, RequestDispatcher>(defaultWebClientConfig)
+                    .ConfigurePrimaryHttpMessageHandler(() => new SocketsHttpHandler
+                    {
+                        UseCookies = false,
+                        PooledConnectionLifetime = TimeSpan.FromMinutes(2),
+                        PooledConnectionIdleTimeout = TimeSpan.FromSeconds(30),
+                        MaxConnectionsPerServer = 50,
+                        AutomaticDecompression = DecompressionMethods.All
+                    })
+                    .AddResilienceHandler("SqliResilience", configureResilience);
+
             services.AddHttpClient<Crawler>(defaultWebClientConfig)
                     .ConfigurePrimaryHttpMessageHandler(() => new SocketsHttpHandler
                     {
@@ -73,39 +84,9 @@ namespace SQLiScanner
                         AllowAutoRedirect = true
                     })
                     .AddResilienceHandler("SqliResilience", configureResilience);
-
-            services.AddHttpClient<ContextAnalyzer>(defaultWebClientConfig)
-                    .ConfigurePrimaryHttpMessageHandler(() => new SocketsHttpHandler
-                    {
-                        UseCookies = false,
-                        PooledConnectionLifetime = TimeSpan.FromMinutes(2),
-                        PooledConnectionIdleTimeout = TimeSpan.FromSeconds(30),
-                        MaxConnectionsPerServer = 50,
-                        AutomaticDecompression = DecompressionMethods.All
-                    })
-                    .AddResilienceHandler("SqliResilience", configureResilience);
-
-            services.AddHttpClient<DatabaseDetector>(defaultWebClientConfig)
-                    .ConfigurePrimaryHttpMessageHandler(() => new SocketsHttpHandler
-                    {
-                        UseCookies = false,
-                        PooledConnectionLifetime = TimeSpan.FromMinutes(2),
-                        PooledConnectionIdleTimeout = TimeSpan.FromSeconds(30),
-                        MaxConnectionsPerServer = 50,
-                        AutomaticDecompression = DecompressionMethods.All
-                    })
-                    .AddResilienceHandler("SqliResilience", configureResilience);
-
-            services.AddHttpClient<UnionDetector>(defaultWebClientConfig)
-                    .ConfigurePrimaryHttpMessageHandler(() => new SocketsHttpHandler
-                    {
-                        UseCookies = false,
-                        PooledConnectionLifetime = TimeSpan.FromMinutes(2),
-                        PooledConnectionIdleTimeout = TimeSpan.FromSeconds(30),
-                        MaxConnectionsPerServer = 50,
-                        AutomaticDecompression = DecompressionMethods.All
-                    })
-                    .AddResilienceHandler("SqliResilience", configureResilience);
+            services.AddTransient<ContextAnalyzer>();
+            services.AddTransient<DatabaseDetector>();
+            services.AddTransient<UnionDetector>();
 
             services.AddHttpClient<IAiApiClient, AiApiClient>(client =>
             {

