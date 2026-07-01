@@ -60,29 +60,29 @@ namespace SQLiScanner
 
             List<CrawlResult> targetsDemo = new()
             {
-                new()
-                {
-                    BaseUrl = "http://testasp.vulnweb.com/Login.asp",
-                    HttpMethod = "GET",
-                    IsForm = false,
-                    Params = new()
-                    {
-                        { "RetURL", "/Default.asp?" }
-                    },
-                    RawQueryString = "RetURL=%2FDefault.asp%3F"
-                },
+                //new()
+                //{
+                //    BaseUrl = "http://testasp.vulnweb.com/Login.asp",
+                //    HttpMethod = "GET",
+                //    IsForm = false,
+                //    Params = new()
+                //    {
+                //        { "RetURL", "/Default.asp?" }
+                //    },
+                //    RawQueryString = "RetURL=%2FDefault.asp%3F"
+                //},
 
-                new()
-                {
-                    BaseUrl = "http://testasp.vulnweb.com/Register.asp",
-                    HttpMethod = "GET",
-                    IsForm = false,
-                    Params = new()
-                    {
-                        { "RetURL", "/Default.asp?" }
-                    },
-                    RawQueryString = "RetURL=%2FDefault.asp%3F"
-                },
+                //new()
+                //{
+                //    BaseUrl = "http://testasp.vulnweb.com/Register.asp",
+                //    HttpMethod = "GET",
+                //    IsForm = false,
+                //    Params = new()
+                //    {
+                //        { "RetURL", "/Default.asp?" }
+                //    },
+                //    RawQueryString = "RetURL=%2FDefault.asp%3F"
+                //},
                 new()
                 {
                     BaseUrl = "http://testasp.vulnweb.com/Login.asp",
@@ -96,62 +96,62 @@ namespace SQLiScanner
                     RawQueryString = "RetURL=%2FDefault.asp%3F"
                 },
 
-                new()
-                {
-                    BaseUrl = "http://testasp.vulnweb.com/showforum.asp",
-                    HttpMethod = "GET",
-                    IsForm = false,
-                    Params = new()
-                    {
-                        { "id", "0" }
-                    },
-                    RawQueryString = "id=0"
-                },
+                //new()
+                //{
+                //    BaseUrl = "http://testasp.vulnweb.com/showforum.asp",
+                //    HttpMethod = "GET",
+                //    IsForm = false,
+                //    Params = new()
+                //    {
+                //        { "id", "0" }
+                //    },
+                //    RawQueryString = "id=0"
+                //},
 
-                new()
-                {
-                    BaseUrl = "https://gamdie.com/",
-                    HttpMethod = "GET",
-                    IsForm = true,
-                    OriginalCookie = "",
-                    Params = new()
-                    {
-                        { "s", "TEST" }
-                    },
-                    RawQueryString = "s=TEST"
-                },
+                //new()
+                //{
+                //    BaseUrl = "https://gamdie.com/",
+                //    HttpMethod = "GET",
+                //    IsForm = true,
+                //    OriginalCookie = "",
+                //    Params = new()
+                //    {
+                //        { "s", "TEST" }
+                //    },
+                //    RawQueryString = "s=TEST"
+                //},
 
-                new()
-                {
-                    BaseUrl = "https://www.ovagames.com/",
-                    HttpMethod = "GET",
-                    IsForm = true,
-                    OriginalCookie = "",
-                    Params = new()
-                    {
-                        { "s", "TEST" }
-                    },
-                    RawQueryString = "s=TEST"
-                },
+                //new()
+                //{
+                //    BaseUrl = "https://www.ovagames.com/",
+                //    HttpMethod = "GET",
+                //    IsForm = true,
+                //    OriginalCookie = "",
+                //    Params = new()
+                //    {
+                //        { "s", "TEST" }
+                //    },
+                //    RawQueryString = "s=TEST"
+                //},
 
-                new()
-                {
-                    BaseUrl = "https://www.ovagames.com/wp-comments-post.php",
-                    HttpMethod = "POST",
-                    IsForm = true,
-                    OriginalCookie = "",
-                    Params = new()
-                    {
-                        { "bde9744e33", "TEST" },
-                        { "comment", "TEST" },
-                        { "author", "TEST" },
-                        { "email", "test@test.com" },
-                        { "url", "http://test.com" },
-                        { "comment_post_ID", "169732" },
-                        { "comment_parent", "0" },
-                    },
-                    RawQueryString = ""
-                },
+                //new()
+                //{
+                //    BaseUrl = "https://www.ovagames.com/wp-comments-post.php",
+                //    HttpMethod = "POST",
+                //    IsForm = true,
+                //    OriginalCookie = "",
+                //    Params = new()
+                //    {
+                //        { "bde9744e33", "TEST" },
+                //        { "comment", "TEST" },
+                //        { "author", "TEST" },
+                //        { "email", "test@test.com" },
+                //        { "url", "http://test.com" },
+                //        { "comment_post_ID", "169732" },
+                //        { "comment_parent", "0" },
+                //    },
+                //    RawQueryString = ""
+                //},
             };
             Console.WriteLine();
             // Bắt đầu cho chạy chờ đọc request từ luồng chính nếu cần AI phân tích
@@ -229,32 +229,42 @@ namespace SQLiScanner
 
             if (vulnerableTargets.Count > 0 && !scanConfig.Token.IsCancellationRequested)
             {
-                AnsiConsole.MarkupLine("\n[bold yellow]--- BẮT ĐẦU GIAI ĐOẠN KHAI THÁC DỮ LIỆU SẠCH ---[/]");
+                AnsiConsole.MarkupLine("\n[bold yellow]--- BẮT ĐẦU GIAI ĐOẠN KHAI THÁC DỮ LIỆU ---[/]");
                 foreach (var (vulnTarget, vulnResult) in vulnerableTargets)
                 {
                     if (scanConfig.Token.IsCancellationRequested) break;
-                    Action<string> onProgress = (message) =>
-                    {
-                        AnsiConsole.MarkupLine($"[blue][[{Markup.Escape(vulnTarget.FullUrl)}]][/] [dim]{Markup.Escape(message)}[/]");
-                    };
 
-                    var exploitResult = await _exploitationEngine.ExtractDataAsync(
-                        vulnTarget,
-                        vulnResult,
-                        "version",
-                        onProgress,
-                        scanConfig.Token
-                    );
+                    ExploitationResult? exploitationResult = null;
 
-                    if (exploitResult.IsSuccess)
+                    await AnsiConsole.Status()
+                        .Spinner(Spinner.Known.BouncingBar)
+                        .SpinnerStyle(Style.Parse("green"))
+                        .StartAsync($"[blue][[{Markup.Escape(vulnTarget.FullUrl)}]][/] [dim]Đang khởi tạo khai thác...[/]", async console =>
+                        {
+                            Action<string> onProgress = (message) =>
+                            {
+                                console.Status($"[blue][[{Markup.Escape(vulnTarget.FullUrl)}]][/] [dim]{Markup.Escape(message)}[/]");
+                            };
+
+                            exploitationResult = await _exploitationEngine.ExtractDataAsync(
+                                vulnTarget,
+                                vulnResult,
+                                "version",
+                                onProgress,
+                                scanConfig.Token
+                            );
+                        });
+
+                    if (exploitationResult != null && exploitationResult.IsSuccess)
                     {
                         // In kết quả trích xuất an toàn đã được làm mờ (Masked)
-                        AnsiConsole.MarkupLine($"[blue][[{Markup.Escape(vulnTarget.FullUrl)}]][/] [bold green]Thành công: {Markup.Escape(exploitResult.ExtractedDataMasked)}[/]");
+                        AnsiConsole.MarkupLine($"[blue][[{Markup.Escape(vulnTarget.FullUrl)}]][/] [bold green]Thành công trích xuất: {Markup.Escape(exploitationResult.ExtractedDataMasked)}[/]");
+                        vulnResult.IsExploitable = true;
                     }
-                    else
+                    else if (exploitationResult != null)
                     {
                         // In kết quả lỗi mờ tránh gây rách màn hình console
-                        AnsiConsole.MarkupLine($"[blue][[{Markup.Escape(vulnTarget.FullUrl)}]][/] [grey]Thất bại: {Markup.Escape(exploitResult.RawData)}[/]");
+                        AnsiConsole.MarkupLine($"[blue][[{Markup.Escape(vulnTarget.FullUrl)}]][/] [grey]Thất bại: {Markup.Escape(exploitationResult.RawData)}[/]");
                     }
                 }
             }

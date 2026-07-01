@@ -199,8 +199,8 @@ namespace SQLiScanner.Utility
                         Console.ForegroundColor = ConsoleColor.DarkGray;
                         Console.WriteLine($"  - Cookie Bypass  : {(result.IsCookieBypass ? "YES (Có thể bypass WAF bằng Cookie)" : "NO (Chỉ thao tác trên query/form inputs)")}");
 
-                        Console.ForegroundColor = result.VulnTypes.HasFlag(VulnerabilityType.UnionBased) ? ConsoleColor.Red : ConsoleColor.DarkGray;
-                        Console.WriteLine($"  - Exploitable    : {(result.VulnTypes.HasFlag(VulnerabilityType.UnionBased) ? "YES (Có thể khai thác sâu)" : "NO (Chỉ phát hiện)")}");
+                        Console.ForegroundColor = result.IsExploitable ? ConsoleColor.Red : ConsoleColor.DarkGray;
+                        Console.WriteLine($"  - Exploitable    : {(result.IsExploitable ? "YES (Có thể khai thác sâu)" : "NO (Chỉ phát hiện)")}");
 
                         if (!string.IsNullOrEmpty(result.ErrorMessage))
                         {

@@ -18,8 +18,9 @@ namespace SQLiScanner.Models
         public string WorkingSuffix { get; set; }
         public string ErrorMessage { get; set; }
 
-        public bool IsCookieBypass => Route.Type == RouteType.Cookie;
+        public bool IsExploitable { get; set; } = false;
         public bool IsVulnerable => VulnTypes != VulnerabilityType.None;
+        public bool IsCookieBypass => Route.Type == RouteType.Cookie;
         public bool IsXSS => VulnTypes.HasFlag(VulnerabilityType.XSS);
         public bool IsErrorExploitable => VulnTypes.HasFlag(VulnerabilityType.ErrorBased);
         public bool IsUnionExploitable => VulnTypes.HasFlag(VulnerabilityType.UnionBased);
