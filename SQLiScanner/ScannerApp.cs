@@ -83,18 +83,18 @@ namespace SQLiScanner
                 //    },
                 //    RawQueryString = "RetURL=%2FDefault.asp%3F"
                 //},
-                new()
-                {
-                    BaseUrl = "http://testasp.vulnweb.com/Login.asp",
-                    HttpMethod = "POST",
-                    IsForm = true,
-                    Params = new()
-                    {
-                        { "tfUName", "admin" },
-                        { "tfUPass", "Admin@123"}
-                    },
-                    RawQueryString = "RetURL=%2FDefault.asp%3F"
-                },
+                //new()
+                //{
+                //    BaseUrl = "http://testasp.vulnweb.com/Login.asp",
+                //    HttpMethod = "POST",
+                //    IsForm = true,
+                //    Params = new()
+                //    {
+                //        { "tfUName", "admin" },
+                //        { "tfUPass", "Admin@123"}
+                //    },
+                //    RawQueryString = "RetURL=%2FDefault.asp%3F"
+                //},
 
                 //new()
                 //{
@@ -134,24 +134,24 @@ namespace SQLiScanner
                 //    RawQueryString = "s=TEST"
                 //},
 
-                //new()
-                //{
-                //    BaseUrl = "https://www.ovagames.com/wp-comments-post.php",
-                //    HttpMethod = "POST",
-                //    IsForm = true,
-                //    OriginalCookie = "",
-                //    Params = new()
-                //    {
-                //        { "bde9744e33", "TEST" },
-                //        { "comment", "TEST" },
-                //        { "author", "TEST" },
-                //        { "email", "test@test.com" },
-                //        { "url", "http://test.com" },
-                //        { "comment_post_ID", "169732" },
-                //        { "comment_parent", "0" },
-                //    },
-                //    RawQueryString = ""
-                //},
+                new()
+                {
+                    BaseUrl = "https://www.ovagames.com/wp-comments-post.php",
+                    HttpMethod = "POST",
+                    IsForm = true,
+                    OriginalCookie = "",
+                    Params = new()
+                    {
+                        { "bde9744e33", "TEST" },
+                        { "comment", "TEST" },
+                        { "author", "TEST" },
+                        { "email", "test@test.com" },
+                        { "url", "http://test.com" },
+                        { "comment_post_ID", "169732" },
+                        { "comment_parent", "0" },
+                    },
+                    RawQueryString = ""
+                },
             };
             Console.WriteLine();
             // Bắt đầu cho chạy chờ đọc request từ luồng chính nếu cần AI phân tích
@@ -171,6 +171,8 @@ namespace SQLiScanner
                         .Where(r => r.VulnerableURL == target.FullUrl
                                     && r.HttpMethod == target.HttpMethod
                                     && !r.VulnTypes.HasFlag(VulnerabilityType.UnionBased)).ToList();
+
+                    // Kiểm tra Union-Based
                     foreach (var result in targetResults)
                     {
                         if (scanConfig.Token.IsCancellationRequested) break;

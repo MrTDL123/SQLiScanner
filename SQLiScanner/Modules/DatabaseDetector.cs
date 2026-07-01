@@ -205,9 +205,8 @@ namespace SQLiScanner.Modules
 
                                     if (config.ExitOnFirstHit) break;
                                 }
-                                if (currentState.Status != ScanStatus.Safe)
-                                    if (currentState.Status != ScanStatus.Error)
-                                        currentState.UpdateStatus(ScanStatus.Safe, "Phản hồi từ đối tượng không chứa các từ khóa cần tìm");
+                                if (currentState.Status != ScanStatus.Safe && currentState.Status != ScanStatus.Vulnerable && currentState.Status != ScanStatus.Error)
+                                    currentState.UpdateStatus(ScanStatus.Safe, "Phản hồi từ đối tượng không chứa các từ khóa cần tìm");
                                 stateIndex++;
                             }
                         }
@@ -281,8 +280,7 @@ namespace SQLiScanner.Modules
 
                                     if (config.ExitOnFirstHit) break;
                                 }
-                                if (currentState.Status != ScanStatus.Safe) 
-                                    if (currentState.Status != ScanStatus.Error)
+                                if (currentState.Status != ScanStatus.Safe && currentState.Status != ScanStatus.Vulnerable && currentState.Status != ScanStatus.Error) 
                                         currentState.UpdateStatus(ScanStatus.Safe, "Payload không có tác dụng");
                                 stateIndex++;
                             }
@@ -351,9 +349,8 @@ namespace SQLiScanner.Modules
 
                                     if (config.ExitOnFirstHit) break;
                                 }
-                                if (currentState.Status != ScanStatus.Safe) 
-                                    if (currentState.Status != ScanStatus.Error)
-                                        currentState.UpdateStatus(ScanStatus.Safe, "Payload Time-based không hoạt động");
+                                if (currentState.Status != ScanStatus.Safe && currentState.Status != ScanStatus.Vulnerable && currentState.Status != ScanStatus.Error)
+                                    currentState.UpdateStatus(ScanStatus.Safe, "Payload Time-based không hoạt động");
                                 stateIndex++;
                             }
                         }
