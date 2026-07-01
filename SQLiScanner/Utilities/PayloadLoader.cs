@@ -2,10 +2,12 @@
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Linq;
+using System.Reflection.Metadata;
 using System.Text;
 using System.Threading.Tasks;
 using System.Xml.Linq;
 using SQLiScanner.Models;
+using SQLiScanner.Models.Enums;
 using SQLiScanner.Utility;
 
 namespace SQLiScanner.Utilities
@@ -14,9 +16,11 @@ namespace SQLiScanner.Utilities
     {
         private static ConcurrentDictionary<int, List<PayloadType>> _cachedPayloads = new();
         private static List<Boundary> _cachedBoundaries;
+        private static ConcurrentDictionary<DatabaseType, ExploitationTemplate> _cachedExploits = new();
 
         private static readonly SemaphoreSlim _boundaryLock = new SemaphoreSlim(1, 1);
         private static readonly SemaphoreSlim _payloadLock = new SemaphoreSlim(1, 1);
+        private static readonly SemaphoreSlim _exploitLock = new SemaphoreSlim(1, 1);
 
         public static async Task<List<Boundary>> LoadBoundariesAsync(string filePath)
         {
@@ -185,15 +189,110 @@ namespace SQLiScanner.Utilities
             };
         }
 
+        public static async Task<ExploitationTemplate> LoadExploitationTemplate(DatabaseType dbType, string directoryPath)
+        {
+            if (_cachedExploits.TryGetValue(dbType, out var cachedPayloads)) 
+                return cachedPayloads;
+
+            await _exploitLock.WaitAsync();
+            try
+            {
+                if (_cachedExploits.TryGetValue(dbType, out var doubleCheckedTemplate))
+                    return doubleCheckedTemplate;
+
+                string fileName = dbType switch
+                {
+                    DatabaseType.MySQL => "mysql.xml",
+                    DatabaseType.MSSQL => "mssql.xml",
+                    DatabaseType.Oracle => "oracle.xml",
+                    DatabaseType.PostgreSQL => "postgresql.xml",
+                    DatabaseType.SQLite => "sqlite.xml",
+                    _ => throw new Exception("Unsupported Database Type for Exploitation")
+                };
+
+                string fullPath = Path.Combine(directoryPath, fileName);
+                if (!File.Exists(fullPath))
+                    throw new FileNotFoundException($"Không tìm thấy file XML: {fullPath}");
+
+                XDocument xDoc;
+                using (var stream = new FileStream(fullPath, FileMode.Open, FileAccess.Read, FileShare.Read, 4096, useAsync: true))
+                {
+                    xDoc = await XDocument.LoadAsync(stream, LoadOptions.None, CancellationToken.None);
+                }
+
+                var root = xDoc.Element("exploitation");
+
+                ExploitationTemplate template = new ExploitationTemplate
+                {
+                    Dbms = root?.Attribute("dbms")?.Value ?? dbType.ToString()
+                };
+
+                // Parse Queries
+                var queriesNode = root?.Element("queries");
+                if (queriesNode != null)
+                {
+                    foreach (var queryNode in queriesNode.Elements("query"))
+                    {
+                        string target = queryNode.Attribute("target")?.Value ?? "unknown";
+                        template.Queries[target] = queryNode.Value.Trim();
+                    }
+                }
+
+                // Parse Error Based
+                var errorNode = root?.Element("error_based");
+                if (errorNode != null)
+                {
+                    template.ErrorTemplate = errorNode.Element("template")?.Value.Trim() ?? "";
+                    template.ErrorGrep = errorNode.Element("grep")?.Value.Trim() ?? "";
+                }
+
+                // Parse Blind Based
+                var blindNode = root?.Element("blind_based");
+                if (blindNode != null)
+                {
+                    template.BlindLengthCondition = blindNode.Element("length_condition")?.Value.Trim() ?? "";
+                    template.BlindCharCondition = blindNode.Element("char_condition")?.Value.Trim() ?? "";
+                }
+
+                // Parse Time Based
+                var timeNode = root?.Element("time_based");
+                if (timeNode != null)
+                {
+                    template.TimeLengthCondition = timeNode.Element("length_condition")?.Value.Trim() ?? "";
+                    template.TimeCharCondition = timeNode.Element("char_condition")?.Value.Trim() ?? "";
+                }
+
+                // Parse Union Based 
+                var unionNode = root?.Element("union_based");
+                if (unionNode != null)
+                {
+                    template.UnionTemplate = unionNode.Element("template")?.Value.Trim() ?? "";
+                    template.UnionColumnTemplate = unionNode.Element("column_template")?.Value.Trim() ?? "";
+                    template.UnionGrep = unionNode.Element("grep")?.Value.Trim() ?? "";
+                }
+
+                _cachedExploits[dbType] = template;
+                return template;
+            }
+            finally
+            {
+                _exploitLock.Release();
+            }
+        }
+
         public static async Task ClearCache()
         {
             await _boundaryLock.WaitAsync();
-            try {_cachedBoundaries = null; }
+            try {_cachedBoundaries.Clear(); }
             finally { _boundaryLock.Release(); }        
 
             await _payloadLock.WaitAsync();
             try {_cachedPayloads.Clear();}
             finally { _payloadLock.Release(); }
+
+            await _exploitLock.WaitAsync();
+            try { _cachedExploits.Clear(); }
+            finally { _exploitLock.Release(); }
             
         }
     }

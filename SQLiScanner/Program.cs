@@ -87,6 +87,7 @@ namespace SQLiScanner
             services.AddTransient<ContextAnalyzer>();
             services.AddTransient<DatabaseDetector>();
             services.AddTransient<UnionDetector>();
+            services.AddTransient<ExploitationEngine>();
 
             services.AddHttpClient<IAiApiClient, AiApiClient>(client =>
             {

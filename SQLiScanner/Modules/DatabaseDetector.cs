@@ -109,11 +109,10 @@ namespace SQLiScanner.Modules
                         Route = heuristicResult.Route,
                         HttpMethod = target.HttpMethod,
                         VulnerableURL = target.FullUrl,
-                        FoundContext = "XSS",
+                        VulnTypes = VulnerabilityType.XSS,
                         DatabaseType = DatabaseType.Unknow,
                         WorkingPrefix = string.Empty,
-                        WorkingSuffix = string.Empty,
-                        IsReflected = heuristicResult.IsReflected
+                        WorkingSuffix = string.Empty
                     };
 
                     config.DetectionResults.Add(xssResult);
@@ -191,11 +190,14 @@ namespace SQLiScanner.Modules
                                         Route = heuristicResult.Route,
                                         HttpMethod = target.HttpMethod,
                                         VulnerableURL = target.FullUrl,
-                                        FoundContext = "ERROR-BASED",
+                                        VulnTypes = heuristicResult.IsReflected switch
+                                        {
+                                            true => VulnerabilityType.ErrorBased | VulnerabilityType.XSS,
+                                            false => VulnerabilityType.ErrorBased
+                                        },
                                         DatabaseType = GetDbTypeFromString(payloads.DBMS),
                                         WorkingPrefix = prefix,
-                                        WorkingSuffix = suffix,
-                                        IsReflected = heuristicResult.IsReflected
+                                        WorkingSuffix = suffix
                                     };
 
                                     Logger.Success($"PHÁT HIỆN {result.DatabaseType} THÔNG QUA THÔNG BÁO LỖI!");
@@ -245,7 +247,7 @@ namespace SQLiScanner.Modules
                                 PayloadState currentState = localStates[stateIndex];
                                 currentState.UpdateStatus(ScanStatus.HeuristicScanning, "Testing Boolean...");
 
-                                bool isBooleanSuccess = await CheckBooleanBasedPayload(
+                                var (isBooleanSuccess, baseLength, falseThreshold) = await CheckBooleanBasedPayload(
                                     target, payloads.DBMS, prefix, suffix, payload,
                                     currentState, config, pendingAiTasks,
                                     heuristicResult.IsReflected, heuristicResult.Route,
@@ -263,11 +265,16 @@ namespace SQLiScanner.Modules
                                         Route = heuristicResult.Route,
                                         HttpMethod = target.HttpMethod,
                                         VulnerableURL = target.FullUrl,
-                                        FoundContext = "BOOLEAN-BASED",
+                                        VulnTypes = heuristicResult.IsReflected switch
+                                        {
+                                            true => VulnerabilityType.BooleanBlind | VulnerabilityType.XSS,
+                                            false => VulnerabilityType.BooleanBlind
+                                        },
                                         DatabaseType = GetDbTypeFromString(payloads.DBMS),
                                         WorkingPrefix = prefix,
                                         WorkingSuffix = suffix,
-                                        IsReflected = heuristicResult.IsReflected
+                                        BaseResponseLength = baseLength,
+                                        BooleanFalseThreshold = falseThreshold
                                     };
                                     Logger.Success($"PHÁT HIỆN {result.DatabaseType} THÔNG QUA Boolean-Based!");
                                     config.DetectionResults.Add(result);
@@ -313,9 +320,9 @@ namespace SQLiScanner.Modules
                                 PayloadState currentState = localStates[stateIndex];
                                 currentState.UpdateStatus(ScanStatus.HeuristicScanning, "Testing Time-Based...");
 
-                                bool isTimeBasedSuccess = await CheckTimeBasedPayloadAsync(
-                                target, prefix, suffix, payload, currentState, heuristicResult.Route,
-                                config.Token);
+                                var (isTimeBasedSuccess, delayTime) = await CheckTimeBasedPayloadAsync(
+                                    target, prefix, suffix, payload, currentState, heuristicResult.Route,
+                                    config.Token);
 
                                 if (isTimeBasedSuccess)
                                 {
@@ -329,11 +336,15 @@ namespace SQLiScanner.Modules
                                         Route = heuristicResult.Route,
                                         HttpMethod = target.HttpMethod,
                                         VulnerableURL = target.FullUrl,
-                                        FoundContext = "TIME-BASED",
+                                        VulnTypes = heuristicResult.IsReflected switch
+                                        {
+                                            true => VulnerabilityType.TimeBasedBlind | VulnerabilityType.XSS,
+                                            false => VulnerabilityType.TimeBasedBlind
+                                        },
                                         DatabaseType = GetDbTypeFromString(payloads.DBMS),
                                         WorkingPrefix = prefix,
                                         WorkingSuffix = suffix,
-                                        IsReflected = heuristicResult.IsReflected
+                                        DelayTime  = delayTime,
                                     };
                                     Logger.Success($"PHÁT HIỆN {result.DatabaseType} THÔNG QUA TIME-BASED!");
                                     config.DetectionResults.Add(result);
@@ -466,7 +477,7 @@ namespace SQLiScanner.Modules
             return false;
         }
 
-        private async Task<bool> CheckBooleanBasedPayload(
+        private async Task<(bool isSuccess, int baseLength, double falseThreshold)> CheckBooleanBasedPayload(
             CrawlResult target, string dbms,
             string prefix, string suffix, string payload, PayloadState currentState,
             ScanConfig config, List<Task> pendingAiTasks, bool isReflected,
@@ -492,7 +503,7 @@ namespace SQLiScanner.Modules
             {
                 Logger.Warning("Mất kết nối hoặc bị WAF chặn. Bỏ qua.");
                 currentState.UpdateStatus(ScanStatus.Error, "Bị WAF chặn / Timeout");
-                return false;
+                return (false, 0, 0.0);
             }
             Logger.Response(statusTrue, bytesTrue.Length);
 
@@ -504,7 +515,7 @@ namespace SQLiScanner.Modules
             {
                 Logger.Warning("Mất kết nối hoặc bị WAF chặn. Bỏ qua.");
                 currentState.UpdateStatus(ScanStatus.Error, "Bị WAF chặn / Timeout");
-                return false;
+                return (false, 0, 0.0);
             }
             Logger.Response(statusFalse, bytesFalse.Length);
 
@@ -512,7 +523,7 @@ namespace SQLiScanner.Modules
             if (statusTrue != statusFalse)
             {
                 Logger.Success($"Phát hiện khác biệt Status Code: True({statusTrue}) != False({statusFalse})");
-                return true;
+                return (true, 0, 0); // có thể khai thác Boolean bằng status code
             }
 
             string textTrue = ExtractPlainText(htmlTrue!);
@@ -528,7 +539,7 @@ namespace SQLiScanner.Modules
             if (similarityState == SimilarityResult.Similar)
             {
                 Logger.Warning($"Phát hiện sự trùng nhau ở dung lượng cả 2. True({bytesTrue.Length}) ~ False({bytesFalse.Length})");
-                return false;
+                return (false, 0, 0.0);
             }
 
             //BÁO CÁO PHÁT HIỆN TRƯỜNG HỢP ĐẶC BIỆT KHI MÃ PHẢN HỒI CẢ 2 GIỐNG NHAU NHƯNG DUNG LƯỢNG CẢ 2 LẠI KHÁC.
@@ -566,11 +577,14 @@ namespace SQLiScanner.Modules
                                     Route = route,
                                     HttpMethod = target.HttpMethod,
                                     VulnerableURL = target.FullUrl,
-                                    FoundContext = "BOOLEAN-BASED",
+                                    VulnTypes = isReflected switch
+                                    {
+                                        true => VulnerabilityType.BooleanBlind | VulnerabilityType.XSS,
+                                        false => VulnerabilityType.BooleanBlind
+                                    },
                                     DatabaseType = GetDbTypeFromString(dbms),
                                     WorkingPrefix = prefix,
                                     WorkingSuffix = suffix,
-                                    IsReflected = isReflected
                                 };
                                 config.DetectionResults.Add(result);
                             }
@@ -586,7 +600,7 @@ namespace SQLiScanner.Modules
                     currentState.UpdateStatus(ScanStatus.Safe, $"Không tìm thấy dữ liệu để gửi AI");
 
                 // Ngay lập tức trả về false để luồng chính phân tích Heuristic
-                return false;
+                return (false, 0, 0.0);
             }
 
             Logger.Process("Đang xác định kịch bản phát hiện...");
@@ -597,7 +611,7 @@ namespace SQLiScanner.Modules
             if (bytesBase == null)
             {
                 Logger.Warning("Không lấy được Base Request. Vẫn ghi nhận lỗi SQLi.");
-                return true;
+                return (true, bytesTrue.Length, dynamicThreshold);
             }
             string textBase = ExtractPlainText(htmlBase!);
 
@@ -622,26 +636,30 @@ namespace SQLiScanner.Modules
                 Logger.Success("Kịch bản phát hiện: Cả True và False đều làm thay đổi trang web so với Base.");
                 currentState.UpdateStatus(ScanStatus.HeuristicScanning, "Bypass: True != False != Base");
             }
-            return true;
+
+            int baseResponseLength = bytesTrue.Length;
+            double observedDiff = (double)Math.Abs(bytesTrue.Length - bytesFalse.Length) / bytesTrue.Length;
+
+            double booleanFalseThreshold = (target.PageTolerance + observedDiff) / 2.0;
+            return (true, baseResponseLength, booleanFalseThreshold);
         }
 
 
-        private async Task<bool> CheckTimeBasedPayloadAsync(
+        private async Task<(bool isSuccess,int delayTime)> CheckTimeBasedPayloadAsync(
             CrawlResult target,
             string prefix,
             string suffix,
             string payload,
             PayloadState currentState,
-            InjectionRoute route, // Thay thế hoàn toàn các biến rời rạc
+            InjectionRoute route,
             CancellationToken cancellationToken = default)
         {
             int sleepSeconds = 5;
-            long sleepMilliseconds = sleepSeconds * 1000;
+            int sleepMilliseconds = sleepSeconds * 1000;
 
             Logger.Info($"\nSử dụng Payload: {payload}");
             string payloadStr = payload.Replace("[SLEEPTIME]", sleepSeconds.ToString());
 
-            // YÊU CẦU 2: Định tuyến và xáo trộn Tamper nếu đi qua ngả Standard (Bypass WAF)
             string rawFullPayload = $"{route.OriginalValue}{prefix} AND {payloadStr} {suffix} ";
             string fullPayload = route.Type == RouteType.Standard
                 ? TamperEngine.ApplyTamper(rawFullPayload)
@@ -665,7 +683,7 @@ namespace SQLiScanner.Modules
             if (baselineDelays.Count == 0)
             {
                 currentState.UpdateStatus(ScanStatus.Error, "Bị WAF chặn / Timeout");
-                return false;
+                return (false, 0);
             }
             long maxBaseline = baselineDelays.Max();
             long avgBaseline = (long)baselineDelays.Average();
@@ -674,7 +692,7 @@ namespace SQLiScanner.Modules
             {
                 Logger.Warning($"Mạng quá chậm (Ping ~{avgBaseline}ms). Bỏ qua Time-Based để tránh False Positive.");
                 currentState.UpdateStatus(ScanStatus.Error, "Mạng quá chậm để sử dụng Time-Based");
-                return false;
+                return (false, 0);
             }
 
             long thresholdMs = maxBaseline + sleepMilliseconds - 500;
@@ -696,7 +714,7 @@ namespace SQLiScanner.Modules
                 if (doubleCheck.isSuccess && doubleCheck.elapsedMs <= maxBaseline + 1000)
                 {
                     Logger.Success($"Hàm SLEEP có tác dụng với thời gian phản hồi Payload độc ({sleepResponse.elapsedMs}) > {thresholdMs}");
-                    return true;
+                    return (true, sleepMilliseconds);
                 }
                 else
                 {
@@ -706,7 +724,7 @@ namespace SQLiScanner.Modules
 
             Logger.Warning($"Payload [{payload}] chứa hàm SLEEP không hoạt động");
             currentState.UpdateStatus(ScanStatus.Safe, "Payload Time-based không hoạt động");
-            return false;
+            return (false, 0);
         }
 
         private SimilarityResult EvaluateSimilarity(

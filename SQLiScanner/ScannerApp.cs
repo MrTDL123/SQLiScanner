@@ -16,16 +16,20 @@ namespace SQLiScanner
         private readonly DatabaseDetector _dbDetector;
         private readonly UnionDetector _unionDetector;
         private readonly AiConcurrencyEngine _aiEngine;
+        private readonly ExploitationEngine _exploitationEngine;
+
         public ScannerApp(
             Crawler crawler,
             DatabaseDetector dbDetector,
             UnionDetector unionDetector,
-            AiConcurrencyEngine aiEngine)
+            AiConcurrencyEngine aiEngine,
+            ExploitationEngine exploitationEngine)
         {
             _crawler = crawler;
             _dbDetector = dbDetector;
             _unionDetector = unionDetector;
             _aiEngine = aiEngine;
+            _exploitationEngine = exploitationEngine;
         }
 
         public async Task RunAsync()
@@ -41,7 +45,7 @@ namespace SQLiScanner
             Console.CancelKeyPress += (sender, e) =>
             {
                 AnsiConsole.MarkupLine("\n[bold red][!] Nhận lệnh hủy từ người dùng. Đang dừng các luồng an toàn...[/]");
-                scanConfig.Cts.Cancel(); // Bóp cò CancellationToken
+                scanConfig.Cts.Cancel();
                 e.Cancel = true;
             };
             AnsiConsole.MarkupLine($"[bold blue][/] Đang bắt đầu quét tại: [underline]{url}[/] (Độ sâu: {maxDepth})");
@@ -154,6 +158,7 @@ namespace SQLiScanner
             _aiEngine.StartWorkers();
 
             var sharedTrackingStates = new List<PayloadState>();
+            var vulnerableTargets = new List<(CrawlResult target, AnalyzingResult result)>();
 
             await RenderLiveScanTableAsync(sharedTrackingStates, async () =>
             {
@@ -165,12 +170,20 @@ namespace SQLiScanner
                     List<AnalyzingResult> targetResults = scanConfig.DetectionResults
                         .Where(r => r.VulnerableURL == target.FullUrl
                                     && r.HttpMethod == target.HttpMethod
-                                    && !r.IsExploitable).ToList();
+                                    && !r.VulnTypes.HasFlag(VulnerabilityType.UnionBased)).ToList();
                     foreach (var result in targetResults)
                     {
-                        // TẠM THỜI ĐỂ ĐÂY ĐỂ TRÁNH CỐ GẮNG SỬ DỤNG PAYLOAD ĐỂ TÌM CỘT NẾU BỊ REFLECTED
-                        if (result.IsReflected) continue;
                         if (scanConfig.Token.IsCancellationRequested) break;
+                        if (result.VulnTypes.HasFlag(VulnerabilityType.XSS)) continue;
+                        if (!result.IsAbleToUnionExploit)
+                        {
+                            lock (vulnerableTargets)
+                            {
+                                vulnerableTargets.Add((target, result));
+                            }
+                            continue;
+                        }
+
                         PayloadState? vulnerableState = sharedTrackingStates.FirstOrDefault(t =>
                             t.TargetUrl == result.VulnerableURL &&
                             t.ParamName == result.VulnerableParam &&
@@ -186,7 +199,10 @@ namespace SQLiScanner
                             {
                                 string colInfo = string.Join(", ", visibleCols);
                                 vulnerableState.UpdateStatus(ScanStatus.Dangerous, $"[Khai thác thành công] Cột text: {colInfo} / Tổng: {colCount}");
-                                result.IsExploitable = true;
+
+                                result.VulnTypes |= VulnerabilityType.UnionBased;
+                                result.ColumnCount = colCount;
+                                result.EchoColumnIndex = visibleCols[0];
                             }
                             else
                             {
@@ -197,6 +213,11 @@ namespace SQLiScanner
                         {
                             vulnerableState.UpdateStatus(ScanStatus.Vulnerable, "Lỗi WAF/Logic: Không đếm được số cột");
                         }
+
+                        lock (vulnerableTargets)
+                        {
+                            vulnerableTargets.Add((target, result));
+                        }
                     }
                 }
 
@@ -205,6 +226,38 @@ namespace SQLiScanner
             });
 
             Logger.IsMuted = false;
+
+            if (vulnerableTargets.Count > 0 && !scanConfig.Token.IsCancellationRequested)
+            {
+                AnsiConsole.MarkupLine("\n[bold yellow]--- BẮT ĐẦU GIAI ĐOẠN KHAI THÁC DỮ LIỆU SẠCH ---[/]");
+                foreach (var (vulnTarget, vulnResult) in vulnerableTargets)
+                {
+                    if (scanConfig.Token.IsCancellationRequested) break;
+                    Action<string> onProgress = (message) =>
+                    {
+                        AnsiConsole.MarkupLine($"[blue][[{Markup.Escape(vulnTarget.FullUrl)}]][/] [dim]{Markup.Escape(message)}[/]");
+                    };
+
+                    var exploitResult = await _exploitationEngine.ExtractDataAsync(
+                        vulnTarget,
+                        vulnResult,
+                        "version",
+                        onProgress,
+                        scanConfig.Token
+                    );
+
+                    if (exploitResult.IsSuccess)
+                    {
+                        // In kết quả trích xuất an toàn đã được làm mờ (Masked)
+                        AnsiConsole.MarkupLine($"[blue][[{Markup.Escape(vulnTarget.FullUrl)}]][/] [bold green]Thành công: {Markup.Escape(exploitResult.ExtractedDataMasked)}[/]");
+                    }
+                    else
+                    {
+                        // In kết quả lỗi mờ tránh gây rách màn hình console
+                        AnsiConsole.MarkupLine($"[blue][[{Markup.Escape(vulnTarget.FullUrl)}]][/] [grey]Thất bại: {Markup.Escape(exploitResult.RawData)}[/]");
+                    }
+                }
+            }
 
             var finalResults = scanConfig.DetectionResults.ToList();
 

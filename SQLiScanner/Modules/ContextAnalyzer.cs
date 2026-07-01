@@ -393,7 +393,7 @@ namespace SQLiScanner.Modules
             result.Similarity = Math.Max(similarityPayloadFalse, similarityPayloadTrue);
 
             // Ngưỡng mức chấp nhận cho Integer (> 95% -> Integer)
-            const double INTEGER_THRESHOLD = 0.95;
+            double INTEGER_THRESHOLD = 1.0 - target.PageTolerance;
             Logger.Process($"Đặt ngưỡng mức trùng nhau là {INTEGER_THRESHOLD * 100}%, sai số {((1.0 - INTEGER_THRESHOLD) * 100):F1}%");
             // Nếu payload 2 - 1 (giống base = 1) trả về như base thì chắc chắn server thực hiện phép trừ và có thể kết luận ngữ cảnh là Integer
             if (similarityPayloadTrue > INTEGER_THRESHOLD && similarityPayloadFalse < INTEGER_THRESHOLD)
@@ -424,7 +424,7 @@ namespace SQLiScanner.Modules
             InjectionRoute route, CancellationToken cancellationToken = default)
         {
             Logger.Info("KỲ VỌNG: Cố tình chèn các Prefix gây lỗi, nếu như đúng là ngữ cảnh STRING thì sẽ báo về lỗi");
-            const double STRING_LIKE_THRESHOLD = 0.90;
+            double STRING_LIKE_THRESHOLD = 1.0 - target.PageTolerance;
             Logger.Process($"Đặt ngưỡng mức trùng nhau là {STRING_LIKE_THRESHOLD * 100}%, sai số {((1.0 - STRING_LIKE_THRESHOLD) * 100):F1}%");
             var testPayloads = new[]
             {
@@ -490,7 +490,8 @@ namespace SQLiScanner.Modules
             Logger.Info("Sử dụng 2 payload True (8341=8341) và False (8341=8342) để kiểm tra");
             currentState.UpdateStatus(ScanStatus.HeuristicScanning, $"Boundary Check: Kiểm tra từng Boundary bằng Boolean Logic...");
 
-            const double SIMILARITY_THRESHOLD = 0.95;
+            double SIMILARITY_THRESHOLD = 1.0 - target.PageTolerance;
+
             foreach (var boundary in result.ApplicableBoundaries)
             {
                 Logger.Process($"Sử dụng Boundary: {boundary}");
