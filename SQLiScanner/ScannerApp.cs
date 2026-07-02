@@ -51,12 +51,12 @@ namespace SQLiScanner
             AnsiConsole.MarkupLine($"[bold blue][/] Đang bắt đầu quét tại: [underline]{url}[/] (Độ sâu: {maxDepth})");
 
             //Crawler tìm mục tiêu
-            //List<CrawlResult> targets = await _crawler.CrawlAsync(url, maxDepth);
-            //if (targets.Count == 0)
-            //{
-            //    Console.WriteLine("[-] Không tìm thấy URL tiềm năng.");
-            //    return;
-            //}
+            List<CrawlResult> targets = await _crawler.CrawlAsync(url, maxDepth);
+            if (targets.Count == 0)
+            {
+                Console.WriteLine("[-] Không tìm thấy URL tiềm năng.");
+                return;
+            }
 
             List<CrawlResult> targetsDemo = new()
             {
@@ -70,6 +70,20 @@ namespace SQLiScanner
                 //        { "RetURL", "/Default.asp?" }
                 //    },
                 //    RawQueryString = "RetURL=%2FDefault.asp%3F"
+                //},
+
+                //new()
+                //{
+                //    BaseUrl = "http://testasp.vulnweb.com/showforum.asp",
+                //    HttpMethod = "GET",
+                //    IsForm = false,
+                //    OriginalCookie = "ASPSESSIONIDACDRSBTA=HMBDEPLCJFJGJJMNEMHIFKME",
+                //    PageTolerance = 0.05,
+                //    Params = new()
+                //    {
+                //        { "id", "0" }
+                //    },
+                //    RawQueryString = "id=0"
                 //},
 
                 //new()
@@ -134,24 +148,24 @@ namespace SQLiScanner
                 //    RawQueryString = "s=TEST"
                 //},
 
-                new()
-                {
-                    BaseUrl = "https://www.ovagames.com/wp-comments-post.php",
-                    HttpMethod = "POST",
-                    IsForm = true,
-                    OriginalCookie = "",
-                    Params = new()
-                    {
-                        { "bde9744e33", "TEST" },
-                        { "comment", "TEST" },
-                        { "author", "TEST" },
-                        { "email", "test@test.com" },
-                        { "url", "http://test.com" },
-                        { "comment_post_ID", "169732" },
-                        { "comment_parent", "0" },
-                    },
-                    RawQueryString = ""
-                },
+                //new()
+                //{
+                //    BaseUrl = "https://www.ovagames.com/wp-comments-post.php",
+                //    HttpMethod = "POST",
+                //    IsForm = true,
+                //    OriginalCookie = "",
+                //    Params = new()
+                //    {
+                //        { "bde9744e33", "TEST" },
+                //        { "comment", "TEST" },
+                //        { "author", "TEST" },
+                //        { "email", "test@test.com" },
+                //        { "url", "http://test.com" },
+                //        { "comment_post_ID", "169732" },
+                //        { "comment_parent", "0" },
+                //    },
+                //    RawQueryString = ""
+                //},
             };
             Console.WriteLine();
             // Bắt đầu cho chạy chờ đọc request từ luồng chính nếu cần AI phân tích
@@ -162,7 +176,7 @@ namespace SQLiScanner
 
             await RenderLiveScanTableAsync(sharedTrackingStates, async () =>
             {
-                foreach (var target in targetsDemo)
+                foreach (var target in targets)
                 {
                     if (scanConfig.Token.IsCancellationRequested) break;
                     await _dbDetector.DetectAsync(target, sharedTrackingStates, scanConfig);
@@ -251,7 +265,7 @@ namespace SQLiScanner
                             exploitationResult = await _exploitationEngine.ExtractDataAsync(
                                 vulnTarget,
                                 vulnResult,
-                                "version",
+                                "current_user",
                                 onProgress,
                                 scanConfig.Token
                             );

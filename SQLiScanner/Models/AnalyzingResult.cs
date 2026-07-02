@@ -18,6 +18,7 @@ namespace SQLiScanner.Models
         public string WorkingSuffix { get; set; }
         public string ErrorMessage { get; set; }
 
+        public int BaseStatusCode { get; set; } = 200;
         public bool IsExploitable { get; set; } = false;
         public bool IsVulnerable => VulnTypes != VulnerabilityType.None;
         public bool IsCookieBypass => Route.Type == RouteType.Cookie;

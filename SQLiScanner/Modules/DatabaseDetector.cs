@@ -246,7 +246,7 @@ namespace SQLiScanner.Modules
                                 PayloadState currentState = localStates[stateIndex];
                                 currentState.UpdateStatus(ScanStatus.HeuristicScanning, "Testing Boolean...");
 
-                                var (isBooleanSuccess, baseLength, falseThreshold) = await CheckBooleanBasedPayload(
+                                var (isBooleanSuccess, baseStatusCode, baseLength, falseThreshold) = await CheckBooleanBasedPayload(
                                     target, payloads.DBMS, prefix, suffix, payload,
                                     currentState, config, pendingAiTasks,
                                     heuristicResult.IsReflected, heuristicResult.Route,
@@ -272,6 +272,7 @@ namespace SQLiScanner.Modules
                                         DatabaseType = GetDbTypeFromString(payloads.DBMS),
                                         WorkingPrefix = prefix,
                                         WorkingSuffix = suffix,
+                                        BaseStatusCode = baseStatusCode,
                                         BaseResponseLength = baseLength,
                                         BooleanFalseThreshold = falseThreshold
                                     };
@@ -474,7 +475,7 @@ namespace SQLiScanner.Modules
             return false;
         }
 
-        private async Task<(bool isSuccess, int baseLength, double falseThreshold)> CheckBooleanBasedPayload(
+        private async Task<(bool isSuccess, int statusCode, int baseLength, double falseThreshold)> CheckBooleanBasedPayload(
             CrawlResult target, string dbms,
             string prefix, string suffix, string payload, PayloadState currentState,
             ScanConfig config, List<Task> pendingAiTasks, bool isReflected,
@@ -500,7 +501,7 @@ namespace SQLiScanner.Modules
             {
                 Logger.Warning("Mất kết nối hoặc bị WAF chặn. Bỏ qua.");
                 currentState.UpdateStatus(ScanStatus.Error, "Bị WAF chặn / Timeout");
-                return (false, 0, 0.0);
+                return (false, statusTrue, 0, 0.0);
             }
             Logger.Response(statusTrue, bytesTrue.Length);
 
@@ -512,7 +513,7 @@ namespace SQLiScanner.Modules
             {
                 Logger.Warning("Mất kết nối hoặc bị WAF chặn. Bỏ qua.");
                 currentState.UpdateStatus(ScanStatus.Error, "Bị WAF chặn / Timeout");
-                return (false, 0, 0.0);
+                return (false, statusFalse, 0, 0.0);
             }
             Logger.Response(statusFalse, bytesFalse.Length);
 
@@ -520,7 +521,7 @@ namespace SQLiScanner.Modules
             if (statusTrue != statusFalse)
             {
                 Logger.Success($"Phát hiện khác biệt Status Code: True({statusTrue}) != False({statusFalse})");
-                return (true, 0, 0); // có thể khai thác Boolean bằng status code
+                return (true, statusTrue, 0, 0); // có thể khai thác Boolean bằng status code
             }
 
             string textTrue = ExtractPlainText(htmlTrue!);
@@ -536,7 +537,7 @@ namespace SQLiScanner.Modules
             if (similarityState == SimilarityResult.Similar)
             {
                 Logger.Warning($"Phát hiện sự trùng nhau ở dung lượng cả 2. True({bytesTrue.Length}) ~ False({bytesFalse.Length})");
-                return (false, 0, 0.0);
+                return (false, statusTrue, 0, 0.0);
             }
 
             //BÁO CÁO PHÁT HIỆN TRƯỜNG HỢP ĐẶC BIỆT KHI MÃ PHẢN HỒI CẢ 2 GIỐNG NHAU NHƯNG DUNG LƯỢNG CẢ 2 LẠI KHÁC.
@@ -597,7 +598,7 @@ namespace SQLiScanner.Modules
                     currentState.UpdateStatus(ScanStatus.Safe, $"Không tìm thấy dữ liệu để gửi AI");
 
                 // Ngay lập tức trả về false để luồng chính phân tích Heuristic
-                return (false, 0, 0.0);
+                return (false, statusTrue, 0, 0.0);
             }
 
             Logger.Process("Đang xác định kịch bản phát hiện...");
@@ -608,7 +609,7 @@ namespace SQLiScanner.Modules
             if (bytesBase == null)
             {
                 Logger.Warning("Không lấy được Base Request. Vẫn ghi nhận lỗi SQLi.");
-                return (true, bytesTrue.Length, dynamicThreshold);
+                return (true, statusTrue, bytesTrue.Length, dynamicThreshold);
             }
             string textBase = ExtractPlainText(htmlBase!);
 
@@ -638,7 +639,7 @@ namespace SQLiScanner.Modules
             double observedDiff = (double)Math.Abs(bytesTrue.Length - bytesFalse.Length) / bytesTrue.Length;
 
             double booleanFalseThreshold = (target.PageTolerance + observedDiff) / 2.0;
-            return (true, baseResponseLength, booleanFalseThreshold);
+            return (true, statusTrue, baseResponseLength, booleanFalseThreshold);
         }
 
 
