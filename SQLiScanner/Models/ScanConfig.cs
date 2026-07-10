@@ -18,6 +18,7 @@ namespace SQLiScanner.Models
         public ConcurrentBag<AnalyzingResult> DetectionResults { get; } = new();
 
         public ConcurrentDictionary<string, (string Prefix, string Suffix)> BoundaryMap { get; } = new();
+        public Action<string>? OnProgress {  get; set; }
         public string GetBoundaryKey(string baseUrl, string httpMethod, string paramName)
         {
             return $"{baseUrl}_{httpMethod}_{paramName}".ToLowerInvariant();

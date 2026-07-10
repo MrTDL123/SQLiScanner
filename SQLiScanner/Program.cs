@@ -57,9 +57,6 @@ namespace SQLiScanner
                     Delay = TimeSpan.FromSeconds(2),
                     OnRetry = arguments =>
                     {
-                        Logger.Info($"\n[!] Gặp rào cản mạng(Status: {arguments.Outcome.Result?.StatusCode})." +
-                                    $"Thử lại lần {arguments.AttemptNumber + 1} sau {arguments.RetryDelay.TotalSeconds:F2}giây...");
-
                         return ValueTask.CompletedTask;
                     }
                 });

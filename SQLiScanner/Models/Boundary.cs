@@ -21,7 +21,7 @@ namespace SQLiScanner.Models
         // 1.Nối thêm đằng sau giá trị ban đầu
         // 2.Thay giá trị ban đầu thành một số âm ngẫu nhiên + payload
         // 3.Thay thế hoàn toàn giá trị ban đầu với payload
-        public string Where { get; set; }
+        public string Where { get; set; } = "1";
 
         // Giá trị tham số hiện tại
         // 1. Integer 
@@ -33,16 +33,15 @@ namespace SQLiScanner.Models
         public int PType { get; set; }
 
         // Chuỗi chèn ở phía trước Payload
-        public string Prefix { get; set; }
+        public string Prefix { get; set; } = String.Empty;
 
         // Chuỗi chèn ở phía sau payload
-        public string Suffix { get; set; }
-        public string Comment { get; set; } 
+        public string Suffix { get; set; } = String.Empty;
 
         // Tên context
         // "INTEGER", "STRING_SINGLE_QUOTE", "LIKE_SINGLE_QUOTE", 
         // "NESTED_PARENTHESIS"
-        public string ContextName { get; set; }
+        public string ContextName { get; set; } = String.Empty;
 
         public override string ToString()
         {

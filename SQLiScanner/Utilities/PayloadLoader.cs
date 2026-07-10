@@ -60,10 +60,7 @@ namespace SQLiScanner.Utilities
                                 ContextName = GetContextName(int.Parse(element.Element("ptype")?.Value ?? "1"))
                             });
                         }
-                        catch (Exception ex)
-                        {
-                            Logger.Warning($"Lỗi parse boundary thứ {index}: {ex.Message}");
-                        }
+                        catch (Exception) {}
 
                         index++;
                     }
@@ -152,10 +149,7 @@ namespace SQLiScanner.Utilities
 
                             payloads.Add(test);
                         }
-                        catch (Exception ex)
-                        {
-                            Logger.Warning($"Lỗi Parse Payload thứ {index}: {ex.Message}");
-                        }
+                        catch (Exception) {}
 
                         index++;
                     }

@@ -29,7 +29,7 @@ namespace SQLiScanner.Models
         public bool IsAbleToUnionExploit => VulnTypes != VulnerabilityType.TimeBasedBlind;
 
         public int ColumnCount { get; set; } = 0;
-        public int EchoColumnIndex { get; set; } = -1;
+        public List<int> EchoColumns {  get; set; } = new List<int>();
 
         public int BaseResponseLength { get; set; } = 0;
         public double BooleanFalseThreshold { get; set; } = 0.0;

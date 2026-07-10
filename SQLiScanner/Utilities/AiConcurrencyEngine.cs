@@ -9,19 +9,16 @@ namespace SQLiScanner.Utility
     public readonly struct AiWorkItem
     {
         public AiContextRequestPayload PayloadData { get; }
-        public PayloadState State { get; } 
         public TaskCompletionSource<bool> CompletionSource { get; }
         // Action dùng để trả kết quả về DatabaseDetector nếu việc phân tích hoàn thành
         public Action<AiContextResponse> OnCompleted { get; }
 
         public AiWorkItem(
             AiContextRequestPayload data, 
-            PayloadState state, 
             TaskCompletionSource<bool> tcs,
             Action<AiContextResponse> onCompleted)
         {
             PayloadData = data;
-            State = state;
             CompletionSource = tcs;
             OnCompleted = onCompleted;
         }
@@ -56,14 +53,11 @@ namespace SQLiScanner.Utility
 
         public Task EnqueueAnalysisAsync(
             AiContextRequestPayload data,
-            PayloadState state,
             Action<AiContextResponse> onCompleted)
-        {
-            state.UpdateStatus(ScanStatus.AiAnalyzing, "Đang đưa vào hàng đợi AI...");
-            
+        {   
             // tcs dùng để báo hiệu task đã hoàn thành
             var tcs = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
-            var workItem = new AiWorkItem(data, state, tcs, onCompleted);
+            var workItem = new AiWorkItem(data, tcs, onCompleted);
 
             // Ghi vào Channel (Nếu đầy 50, nó sẽ tự động await đợi ở đây)
             _ = _channel.Writer.WriteAsync(workItem);
@@ -79,8 +73,6 @@ namespace SQLiScanner.Utility
             {
                 try
                 {
-                    item.State.UpdateStatus(ScanStatus.AiAnalyzing, "Đang gọi Gemini API...");
-
                     var response = await _aiApiClient.AnalyzeSqlInjectionAsync(item.PayloadData);
 
                     // Kích hoạt flag đẻ producer có thể kết thúc luồng
@@ -90,7 +82,6 @@ namespace SQLiScanner.Utility
                 catch (Exception ex)
                 {
                     item.CompletionSource.TrySetException(ex);
-                    item.State.UpdateStatus(ScanStatus.Error, "Lỗi gọi AI: " + ex.Message);
                 }
             }
         }

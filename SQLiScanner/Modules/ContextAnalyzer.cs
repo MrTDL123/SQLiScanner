@@ -42,7 +42,7 @@ namespace SQLiScanner.Modules
         }
 
         public async Task<HeuristicResult> PerformHeuristicScanAsync(
-            CrawlResult target, string paramName, PayloadState currentState, CancellationToken cancellationToken)
+            CrawlResult target, string paramName, ScanConfig config)
         {
             string originalValue = target.Params.TryGetValue(paramName, out var bodyVal)
                 ? bodyVal
@@ -53,19 +53,18 @@ namespace SQLiScanner.Modules
             try
             {
                 InjectionRoute route = InjectionRoute.CreateStandard(paramName, originalValue);
-                
-                currentState.UpdateStatus(ScanStatus.HeuristicScanning, "Đang tải cấu trúc trang gốc (Baseline)...");
-                var (baseHtml, baseBytes, baseStatus, _,baseHeaders) = await _requestService.RequestAsync(target, originalValue, route, cancellationToken);
+
+                config.OnProgress?.Invoke("Đang tải cấu trúc trang gốc (Baseline)...");
+                var (baseHtml, baseBytes, baseStatus, _,baseHeaders) = await _requestService.RequestAsync(target, originalValue, route, config.Token);
                 if (baseBytes == null)
                 {
                     result.Status = "FAILED";
-                    Logger.Warning("Không lấy được Baseline. Target có thể đã sập hoặc WAF chặn.");
-                    currentState.UpdateStatus(ScanStatus.Error, "Lỗi: Không lấy được Baseline (WAF/Drop)");
+                    config.OnProgress?.Invoke("Lỗi: Không lấy được Baseline (WAF/Drop)");
                     return result;
                 }
 
-                currentState.UpdateStatus(ScanStatus.HeuristicScanning, "Đang tự động đo đạc độ nhiễu nền trang (Calibration)...");
-                var (baseHtml2, baseBytes2, baseStatus2, _, _) = await _requestService.RequestAsync(target, originalValue, route, cancellationToken);
+                config.OnProgress?.Invoke("Đang tự động đo đạc độ nhiễu nền trang (Calibration)...");
+                var (baseHtml2, baseBytes2, baseStatus2, _, _) = await _requestService.RequestAsync(target, originalValue, route, config.Token);
 
                 if (baseBytes2 != null)
                 {
@@ -79,11 +78,11 @@ namespace SQLiScanner.Modules
 
                     if (backgroundNoise > 0.30)
                     {
-                        Logger.Warning($"[!] Cảnh báo: Trang web rất hỗn loạn! Độ nhiễu nền đo được: {(backgroundNoise * 100):F1}%. Ngưỡng dung sai động được nâng lên: {(target.PageTolerance * 100):F1}%");
+                        config.OnProgress?.Invoke($"[!] Cảnh báo: Trang web rất hỗn loạn! Độ nhiễu nền đo được: {(backgroundNoise * 100):F1}%. Ngưỡng dung sai động được nâng lên: {(target.PageTolerance * 100):F1}%");
                     }
                     else
                     {
-                        Logger.Info($"[*] Đo đạc độ nhiễu trang thành công: {(backgroundNoise * 100):F2}%. Ngưỡng dung sai động được thiết lập: {(target.PageTolerance * 100):F2}%");
+                        config.OnProgress?.Invoke($"[*] Đo đạc độ nhiễu trang thành công: {(backgroundNoise * 100):F2}%. Ngưỡng dung sai động được thiết lập: {(target.PageTolerance * 100):F2}%");
                     }
                 }
                 else
@@ -91,11 +90,11 @@ namespace SQLiScanner.Modules
                     target.PageTolerance = 0.05;
                 }
 
-                currentState.UpdateStatus(ScanStatus.HeuristicScanning, "Đang dò cookie thụ động...");
+                config.OnProgress?.Invoke("Đang dò cookie thụ động...");
                 var passiveCookies = MinePassiveCookie(baseHtml, baseHeaders);
 
-                currentState.UpdateStatus(ScanStatus.HeuristicScanning, "Đang dò cookie bằng Fuzzing...");
-                var activeCookies = await MineActiveCookiesAsync(target, baseHtml, originalValue, baseStatus, baseBytes.Length, cancellationToken);
+                config.OnProgress?.Invoke("Đang dò cookie bằng Fuzzing...");
+                var activeCookies = await MineActiveCookiesAsync(target, baseHtml, originalValue, baseStatus, baseBytes.Length, config.Token);
 
                 // Gộp danh sách Cookie từ 2 lần dò trên
                 var minedCookies = new HashSet<string>(passiveCookies, StringComparer.OrdinalIgnoreCase);
@@ -103,18 +102,18 @@ namespace SQLiScanner.Modules
 
                 if (minedCookies.Count > 0)
                 {
-                    currentState.UpdateStatus(ScanStatus.HeuristicScanning, $"Tìm thấy {minedCookies.Count} Cookies hoạt động: {string.Join(", ", minedCookies)}");
+                    config.OnProgress?.Invoke($"Tìm thấy {minedCookies.Count} Cookies hoạt động: {string.Join(", ", minedCookies)}");
                 }
 
-                currentState.UpdateStatus(ScanStatus.HeuristicScanning, $"Đang chạy Cookie Aliasing cho [{paramName}]...");
-                route = await CheckCookieAliasingAsync(target, paramName, minedCookies, cancellationToken);
+                config.OnProgress?.Invoke($"Đang chạy Cookie Aliasing cho [{paramName}]...");
+                route = await CheckCookieAliasingAsync(target, paramName, minedCookies, config.Token);
 
                 result.Route = route;
 
                 string canary = ReflectionDetector.GenerateCanaryToken();
 
-                currentState.UpdateStatus(ScanStatus.HeuristicScanning, $"Kiểm tra XSS: Gửi token {canary}");
-                var (canaryHtml, canaryBytes, _, _, _) = await _requestService.RequestAsync(target, canary, route, cancellationToken);
+                config.OnProgress?.Invoke($"Kiểm tra XSS: Gửi token {canary}");
+                var (canaryHtml, canaryBytes, _, _, _) = await _requestService.RequestAsync(target, canary, route, config.Token);
 
                 if (canaryBytes != null)
                 {
@@ -122,36 +121,31 @@ namespace SQLiScanner.Modules
                     {
                         result.IsReflected = true;
                         result.CanaryToken = canary;
-                        Logger.Warning($"[!] Phát hiện tham số [{paramName}] bị rò rỉ dữ liệu (XSS/Reflected). Kích hoạt bộ lọc chống nhiễu DOM.");
-                        currentState.UpdateStatus(ScanStatus.HeuristicScanning, "XSS/Reflected: Phát hiện rò rỉ đầu vào");
+                        config.OnProgress?.Invoke("XSS/Reflected: Phát hiện rò rỉ đầu vào");
                     }
                 }
 
                 if (result.IsCookiePriority)
                 {
-                    Logger.Success($"ĐỊNH TUYẾN MỚI: Server ưu tiên Cookie cho [{paramName}]. Kích hoạt định tuyến Payload vào Header!");
+                    config.OnProgress?.Invoke($"ĐỊNH TUYẾN MỚI: Server ưu tiên Cookie cho [{paramName}]. Kích hoạt định tuyến Payload vào Header!");
                 }
                 else
                 {
-                    Logger.Info($"[-] Định tuyến bình thường: Sử dụng tham số URL/Form để truyền Payload.");
+                    config.OnProgress?.Invoke($"[-] Định tuyến bình thường: Sử dụng tham số URL/Form để truyền Payload.");
                 }
 
-                Logger.Phase($"XÁC ĐỊNH NGỮ CẢNH CỦA {target.BaseUrl} (Tham số: {paramName})");
-                currentState.UpdateStatus(ScanStatus.HeuristicScanning, $"Đang phân tích bối cảnh: {paramName}");
+                config.OnProgress?.Invoke($"XÁC ĐỊNH NGỮ CẢNH CỦA {target.BaseUrl} (Tham số: {paramName})");
                 // PHASE 1: Kiểm tra ngữ cảnh là INTEGER
-                Logger.Info("Kiểm tra ngữ cảnh integer...");
-                currentState.UpdateStatus(ScanStatus.HeuristicScanning, "Heuristic: Kiểm tra bối cảnh số nguyên (Integer)...");
-                await Phase1_DetectIntegerContextAsync(target, result, currentState, route, cancellationToken);
+                config.OnProgress?.Invoke("Kiểm tra ngữ cảnh integer...");
+                await Phase1_DetectIntegerContextAsync(target, result, route, config);
 
                 if (result.DetectedType != "INTEGER")
                 {
                     // PHASE 2: Kiểm tra liệu ngữ cảnh có phải là string-like
-                    Logger.Phase("[PHASE 2] KIỂM TRA NGỮ CẢNH STRING THÔNG QUA ERROR-BASED");
-                    currentState.UpdateStatus(ScanStatus.HeuristicScanning, "Heuristic: Kiểm tra bối cảnh chuỗi (String/LIKE)...");
+                    config.OnProgress?.Invoke("[PHASE 2] KIỂM TRA NGỮ CẢNH STRING THÔNG QUA ERROR-BASED");
                     await Phase2_DetectStringContextAsync(
                         target, baseStatus, baseBytes.Length, baseHtml, 
-                        result, currentState,
-                        route, cancellationToken
+                        result, route, config
                     );
                 }
 
@@ -159,19 +153,16 @@ namespace SQLiScanner.Modules
                 if (result.ApplicableBoundaries.Count > 0)
                 {
                     // PHASE 3: Xác định ngữ cảnh
-                    Logger.Phase("[PHASE 3] XÁC ĐỊNH CHÍNH XÁC BOUNDARY");
-                    currentState.UpdateStatus(ScanStatus.HeuristicScanning, "Heuristic: Đang dò tìm và khóa Boundary...");
+                    config.OnProgress?.Invoke("[PHASE 3] XÁC ĐỊNH CHÍNH XÁC BOUNDARY");
                     await Phase3_VerifyBoundaryAsync(
                         target, baseStatus, baseBytes.Length, baseHtml, 
-                        result, currentState,
-                        route, cancellationToken
+                        result, route, config
                     );
                 }
 
                 if (!result.IsReadyForDetection)
                 {
-                    Logger.Warning($"Không tìm được boundary bằng Heuritic. Buộc load hết toàn bộ boundaries và Payload");
-                    currentState.UpdateStatus(ScanStatus.HeuristicDone, $"Không tìm được ngữ cảnh thích hợp, load toàn bộ boundary và payload");
+                    config.OnProgress?.Invoke($"Không tìm được boundary bằng Heuritic. Buộc load hết toàn bộ boundaries và Payload");
                     result.Status = "UNCERTAIN";
                     result.ApplicableBoundaries = await GetAllApplicableBoundaries();
                     await LoadApplicablePayloadsAsync(result);
@@ -182,7 +173,7 @@ namespace SQLiScanner.Modules
             catch (Exception ex)
             {
                 // Nếu xảy ra lỗi thì load toàn bộ boundary và payload
-                Logger.Error($"Lỗi nghiêm trọng tại ContextAnalyzer: {ex.Message}");
+                config.OnProgress?.Invoke($"Lỗi nghiêm trọng tại ContextAnalyzer: {ex.Message}");
                 result.Status = "FAILED";
 
                 result.ApplicableBoundaries = await GetAllApplicableBoundaries();
@@ -193,8 +184,6 @@ namespace SQLiScanner.Modules
 
         private async Task<List<Boundary>> GetBoundariesByPType(int ptype)
         {
-            Logger.Process($"Load các boundary với ptype = {ptype}");
-
             try
             {
                 var allBoundaries = await PayloadLoader.LoadBoundariesAsync(_boundariesXmlPath);
@@ -326,15 +315,13 @@ namespace SQLiScanner.Modules
 
         #region Các hàm phụ trợ
         private async Task Phase1_DetectIntegerContextAsync(
-            CrawlResult target, HeuristicResult result, PayloadState currentState,
-            InjectionRoute route, CancellationToken cancellationToken = default)
+            CrawlResult target, HeuristicResult result,
+            InjectionRoute route, ScanConfig config)
         {
-            Logger.Info("KỲ VỌNG: Các tham số với payload là các toán tử, nếu như tham số là INTEGER thì các phép toán này sẽ hoạt động.");
             // Lấy base response
-            Logger.Process("Kiểm tra tham số với giá trị = 1");
-            currentState.UpdateStatus(ScanStatus.HeuristicScanning, "Integer Check: Gửi request với tham số = 1...");
+            config.OnProgress?.Invoke("Kiểm tra tham số với giá trị = 1");
             var (baselineHtml, baselineBytes, baselineStatus, _, _) =
-                await _requestService.RequestAsync(target, INT_PAYLOAD_1, route, cancellationToken);
+                await _requestService.RequestAsync(target, INT_PAYLOAD_1, route, config.Token);
             if (baselineBytes == null)
             {
                 result.DetectedType = "UNKNOWN";
@@ -342,30 +329,25 @@ namespace SQLiScanner.Modules
                 return;
             }
 
-            Logger.Response(baselineStatus, baselineBytes.Length);
             int baselineLength = baselineBytes.Length;
 
             // Test payloa False
-            Logger.Process("Kiểm tra tham số với giá trị = 1-1");
-            currentState.UpdateStatus(ScanStatus.HeuristicScanning, "Integer Check: Gửi biểu thức toán học [1-1]...");
+            config.OnProgress?.Invoke("Kiểm tra tham số với giá trị = 1-1");
             var (falseHtml, falseBytes, falseStatus, _, _) =
-                await _requestService.RequestAsync(target, INT_PAYLOAD_2, route, cancellationToken);
+                await _requestService.RequestAsync(target, INT_PAYLOAD_2, route, config.Token);
 
             if (falseBytes == null)
             {
                 result.DetectedType = "UNKNOWN";
                 result.ConfidenceScore = 0;
-                Logger.Warning("Không nhận được phản hồi từ đối tượng. Kiểm tra Phase 1 thất bại!");
+                config.OnProgress?.Invoke("Không nhận được phản hồi từ đối tượng. Kiểm tra Phase 1 thất bại!");
                 return;
             }
-            Logger.Response(falseStatus, falseBytes.Length);
-
 
             // Test payload 3
-            Logger.Process("Kiểm tra tham số với giá trị = 2-1");
-            currentState.UpdateStatus(ScanStatus.HeuristicScanning, "Integer Check: Gửi biểu thức toán học [2-1]...");
+            config.OnProgress?.Invoke("Kiểm tra tham số với giá trị = 2-1");
             var (trueHtml, trueBytes, trueStatus, _, _) =
-                await _requestService.RequestAsync(target, INT_PAYLOAD_3, route, cancellationToken);
+                await _requestService.RequestAsync(target, INT_PAYLOAD_3, route, config.Token);
             if (trueBytes == null)
             {
                 result.DetectedType = "UNKNOWN";
@@ -373,35 +355,32 @@ namespace SQLiScanner.Modules
                 return;
             }
 
-            Logger.Response(trueStatus, trueBytes.Length);
 
-            Logger.Info("Đang mong chờ phản hồi có payload (2-1) sẽ giống (1) và ngược lại đối với (1-1) sẽ không giống (1)");
+            config.OnProgress?.Invoke("Đang mong chờ phản hồi có payload (2-1) sẽ giống (1) và ngược lại đối với (1-1) sẽ không giống (1)");
             // Nếu cả base và payload 2 và 3 đều giống nhau thì tham số là Integer
             double similarityPayloadFalse = CalculateSimilarity(
                 baselineStatus, baselineLength, baselineHtml,
                 falseStatus, falseBytes.Length, falseHtml,
                 target.PageTolerance);
-            Logger.Info($"Payload (1-1) giống {(similarityPayloadFalse * 100):F1}% so với Payload (1)");
+            config.OnProgress?.Invoke($"Payload (1-1) giống {(similarityPayloadFalse * 100):F1}% so với Payload (1)");
 
             double similarityPayloadTrue = CalculateSimilarity(
                 baselineStatus, baselineLength, baselineHtml,
                 trueStatus, trueBytes.Length, trueHtml,
                 target.PageTolerance
             );
-            Logger.Info($"Payload (2-1) giống {similarityPayloadFalse * 100}% so với Payload (1)");
+            config.OnProgress?.Invoke($"Payload (2-1) giống {similarityPayloadFalse * 100}% so với Payload (1)");
 
             result.Similarity = Math.Max(similarityPayloadFalse, similarityPayloadTrue);
 
             // Ngưỡng mức chấp nhận cho Integer (> 95% -> Integer)
             double INTEGER_THRESHOLD = 1.0 - target.PageTolerance;
-            Logger.Process($"Đặt ngưỡng mức trùng nhau là {INTEGER_THRESHOLD * 100}%, sai số {((1.0 - INTEGER_THRESHOLD) * 100):F1}%");
+            config.OnProgress?.Invoke($"Đặt ngưỡng mức trùng nhau là {INTEGER_THRESHOLD * 100}%, sai số {((1.0 - INTEGER_THRESHOLD) * 100):F1}%");
             // Nếu payload 2 - 1 (giống base = 1) trả về như base thì chắc chắn server thực hiện phép trừ và có thể kết luận ngữ cảnh là Integer
             if (similarityPayloadTrue > INTEGER_THRESHOLD && similarityPayloadFalse < INTEGER_THRESHOLD)
             {
-                Logger.Success("Phát hiện payload (2-1) trùng với payload (1) như dự đoán.");
-                Logger.Success($"THÀNH CÔNG PHÁT HIỆN: INTEGER (ĐIỂM: {result.ConfidenceScore}%)");
-                Logger.Info("Cần phải trải qua PHASE 3 để xác định BOUNDARY CHÍNH XÁC.");
-                currentState.UpdateStatus(ScanStatus.HeuristicScanning, "Phát hiện mục tiêu nằm trong ngữ cảnh Integer");
+                config.OnProgress?.Invoke($"THÀNH CÔNG PHÁT HIỆN: INTEGER (ĐIỂM: {result.ConfidenceScore}%)");
+                config.OnProgress?.Invoke("Cần phải trải qua PHASE 3 để xác định BOUNDARY CHÍNH XÁC.");
                 result.DetectedType = "INTEGER";
                 result.ConfidenceScore = (int)Math.Min(100, (result.Similarity * 100));
                 result.ApplicableBoundaries = await GetBoundariesByPType(1);
@@ -411,21 +390,18 @@ namespace SQLiScanner.Modules
             result.DetectedType = "UNCERTAIN";
             result.ConfidenceScore = 0;
 
-            Logger.Warning($"Payload True (2-1) và Payload False (1-1) đều không ra như kết quả dự đoán.");
-            Logger.Warning("Không thể là INTEGER - Chuyển sang kiểm tra ngữ cảnh STRING-LIKE ở Phase 2");
-            currentState.UpdateStatus(ScanStatus.HeuristicScanning, "Mục tiêu không nằm trong ngữ cảnh Integer");
+            config.OnProgress?.Invoke("Không thể là INTEGER - Chuyển sang kiểm tra ngữ cảnh STRING-LIKE ở Phase 2");
             return;
         }
 
         private async Task Phase2_DetectStringContextAsync(
             CrawlResult target,
             int baselineStatus, int baselineLength, string baselineHtml,
-            HeuristicResult result, PayloadState currentState,
-            InjectionRoute route, CancellationToken cancellationToken = default)
+            HeuristicResult result, InjectionRoute route, ScanConfig config)
         {
-            Logger.Info("KỲ VỌNG: Cố tình chèn các Prefix gây lỗi, nếu như đúng là ngữ cảnh STRING thì sẽ báo về lỗi");
+            config.OnProgress?.Invoke("KỲ VỌNG: Cố tình chèn các Prefix gây lỗi, nếu như đúng là ngữ cảnh STRING thì sẽ báo về lỗi");
             double STRING_LIKE_THRESHOLD = 1.0 - target.PageTolerance;
-            Logger.Process($"Đặt ngưỡng mức trùng nhau là {STRING_LIKE_THRESHOLD * 100}%, sai số {((1.0 - STRING_LIKE_THRESHOLD) * 100):F1}%");
+            config.OnProgress?.Invoke($"Đặt ngưỡng mức trùng nhau là {STRING_LIKE_THRESHOLD * 100}%, sai số {((1.0 - STRING_LIKE_THRESHOLD) * 100):F1}%");
             var testPayloads = new[]
             {
                 $"{route.OriginalValue}'",    // Single quote
@@ -437,25 +413,22 @@ namespace SQLiScanner.Modules
 
             foreach (var payload in testPayloads)
             {
-                Logger.Process($"Chèn payload [{payload}]");
-                currentState.UpdateStatus(ScanStatus.HeuristicScanning, $"String Check: Gửi payload [{payload}] gây lỗi không...");
+                config.OnProgress?.Invoke($"Chèn payload [{payload}]");
                 var (testHtml, testBytes, testStatus, _, _) =
-                    await _requestService.RequestAsync(target, payload, route, cancellationToken);
+                    await _requestService.RequestAsync(target, payload, route, config.Token);
 
                 if (testBytes == null)
                 {
-                    Logger.Skipped("Không nhận được phản hồi từ đối tượng. Chuyển sang Payload khác!");
+                    config.OnProgress?.Invoke("Không nhận được phản hồi từ đối tượng. Chuyển sang Payload khác!");
                     continue;
                 }
-                Logger.Response(testStatus, testBytes.Length);
-
 
                 double similarity = CalculateSimilarity(
                     baselineStatus, baselineLength, baselineHtml,
                     testStatus, testBytes.Length, testHtml,
                     target.PageTolerance
                 );
-                Logger.Info($"Payload [{payload}] giống {similarity * 100}% so request nguyên bản");
+                config.OnProgress?.Invoke($"Payload [{payload}] giống {similarity * 100}% so request nguyên bản");
 
                 if (similarity < STRING_LIKE_THRESHOLD)
                 {
@@ -464,8 +437,7 @@ namespace SQLiScanner.Modules
                     result.Similarity = similarity * 100;
                     result.ApplicableBoundaries = await GetAllStringLikeBoundaries();
 
-                    Logger.Success($"PHÁT HIỆN PAYLOAD [{payload}] GÂY LỖI, CHẮC CHẮN LÀ STRING-LIKE - ĐIỂM: {result.ConfidenceScore}%");
-                    currentState.UpdateStatus(ScanStatus.HeuristicScanning, $"Phát hiện payload [{payload}] gây lỗi. Mục tiêu nằm trong ngữ cảnh STRING");
+                    config.OnProgress?.Invoke($"PHÁT HIỆN PAYLOAD [{payload}] GÂY LỖI, CHẮC CHẮN LÀ STRING-LIKE - ĐIỂM: {result.ConfidenceScore}%");
                     return;
                 }
             }
@@ -475,83 +447,74 @@ namespace SQLiScanner.Modules
             result.Similarity = 100;
             result.ApplicableBoundaries = await GetAllApplicableBoundaries();
 
-            Logger.Warning("Không tìm thấy dấu hiệu là string - Cần phải kiểm tra toàn bộ boundary ở Phase 3");
-            currentState.UpdateStatus(ScanStatus.HeuristicScanning, "Mục tiêu không nằm trong ngữ cảnh STRING");
+            config.OnProgress?.Invoke("Không tìm thấy dấu hiệu là string - Cần phải kiểm tra toàn bộ boundary ở Phase 3");
             return;
         }
 
         private async Task Phase3_VerifyBoundaryAsync(
-            CrawlResult target,
-            int baselineStatus, int baselineLength, string baselineHtml,
-            HeuristicResult result, PayloadState currentState,
-            InjectionRoute route, CancellationToken cancellationToken = default)
+            CrawlResult target, int baselineStatus, int baselineLength, string baselineHtml,
+            HeuristicResult result, InjectionRoute route, ScanConfig config)
         {
-            Logger.Info("KỲ VỌNG: Xác định chính xác boundary thông qua thử từng boundary bằng BOOLEAN LOGIC.");
-            Logger.Info("Sử dụng 2 payload True (8341=8341) và False (8341=8342) để kiểm tra");
-            currentState.UpdateStatus(ScanStatus.HeuristicScanning, $"Boundary Check: Kiểm tra từng Boundary bằng Boolean Logic...");
+            config.OnProgress?.Invoke("KỲ VỌNG: Xác định chính xác boundary thông qua thử từng boundary bằng BOOLEAN LOGIC.");
+            config.OnProgress?.Invoke("Sử dụng 2 payload True (8341=8341) và False (8341=8342) để kiểm tra");
 
             double SIMILARITY_THRESHOLD = 1.0 - target.PageTolerance;
 
             foreach (var boundary in result.ApplicableBoundaries)
             {
-                Logger.Process($"Sử dụng Boundary: {boundary}");
+                config.OnProgress?.Invoke($"Sử dụng Boundary: {boundary}");
                 string trueCondition = "8341=8341";
                 string falseCondition = "8341=8342";
 
-                Logger.Process($"Thiết lặp True Payload (Prefix: [{boundary.Prefix}] | Suffix: [{boundary.Suffix}])");
+                config.OnProgress?.Invoke($"Thiết lặp True Payload (Prefix: [{boundary.Prefix}] | Suffix: [{boundary.Suffix}])");
                 string truePayload = $"{route.OriginalValue}{boundary.Prefix} AND {trueCondition} {boundary.Suffix} ";
-                Logger.Process($"Thiết lặp False Payload (Prefix: [{boundary.Prefix}] | Suffix: [{boundary.Suffix}])");
+                config.OnProgress?.Invoke($"Thiết lặp False Payload (Prefix: [{boundary.Prefix}] | Suffix: [{boundary.Suffix}])");
                 string falsePayload = $"{route.OriginalValue}{boundary.Prefix} AND {falseCondition} {boundary.Suffix} ";
 
                 // TEST FALSE PAYLOAD (Kỳ vọng: Khác Base)
-                Logger.Process("Gửi False Payload...");
-                var (htmlFalse, bytesFalse, statusFalse, _, _) = await _requestService.RequestAsync(target, falsePayload, route, cancellationToken);
+                config.OnProgress?.Invoke("Gửi False Payload...");
+                var (htmlFalse, bytesFalse, statusFalse, _, _) = await _requestService.RequestAsync(target, falsePayload, route, config.Token);
                 if (bytesFalse == null)
                 {
-                    Logger.Warning("Không nhận được phản hồi từ đối tượng. Chuyển sang boundary tiếp theo!");
+                    config.OnProgress?.Invoke("Không nhận được phản hồi từ đối tượng. Chuyển sang boundary tiếp theo!");
                     continue;
                 }
-
-                Logger.Response(statusFalse, bytesFalse.Length);
 
                 double simFalse = CalculateSimilarity(
                     baselineStatus, baselineLength, baselineHtml,
                     statusFalse, bytesFalse.Length, htmlFalse,
                     target.PageTolerance);
-                Logger.Info($"Payload False giống {(simFalse * 100):F1}% so request nguyên bản");
+                config.OnProgress?.Invoke($"Payload False giống {(simFalse * 100):F1}% so request nguyên bản");
 
                 // TEST TRUE PAYLOAD (Kỳ vọng: Giống Base)
-                Logger.Process("Gửi True Payload...");
-                var (htmlTrue, bytesTrue, statusTrue, _, _) = await _requestService.RequestAsync(target, truePayload, route, cancellationToken);
+                config.OnProgress?.Invoke("Gửi True Payload...");
+                var (htmlTrue, bytesTrue, statusTrue, _, _) = await _requestService.RequestAsync(target, truePayload, route, config.Token);
                 if (bytesTrue == null)
                 {
-                    Logger.Warning("Không nhận được phản hồi từ đối tượng. Chuyển sang boundary tiếp theo!");
+                    config.OnProgress?.Invoke("Không nhận được phản hồi từ đối tượng. Chuyển sang boundary tiếp theo!");
                     continue;
                 }
-                Logger.Response(statusTrue, bytesTrue.Length);
-
 
                 double simTrue = CalculateSimilarity(
                     baselineStatus, baselineLength, baselineHtml,
                     statusTrue, bytesTrue.Length, htmlTrue,
                     target.PageTolerance);
-                Logger.Info($"Payload True giống {simTrue * 100}% so request nguyên bản");
+                config.OnProgress?.Invoke($"Payload True giống {simTrue * 100}% so request nguyên bản");
 
                 // Kịch bản 1: True giống Base, False khác Base
                 bool isRegularMatch = simTrue >= SIMILARITY_THRESHOLD && simFalse < SIMILARITY_THRESHOLD;
-                if (isRegularMatch) Logger.Success("Phát hiện: True giống Base, False khác Base (Đúng như dự đoán)");
+                if (isRegularMatch) config.OnProgress?.Invoke("Phát hiện: True giống Base, False khác Base (Đúng như dự đoán)");
 
                 // Kịch bản 2: False giống Base, True khác Base (Trường hợp Bypass / Original Value là sai)
                 bool isInverseMatch = simFalse >= SIMILARITY_THRESHOLD && simTrue < SIMILARITY_THRESHOLD;
-                if (isInverseMatch) Logger.Success("Phát hiện: False giống Base, True khác Base (Trường hợp Bypass / Original Value là sai)");
+                if (isInverseMatch) config.OnProgress?.Invoke("Phát hiện: False giống Base, True khác Base (Trường hợp Bypass / Original Value là sai)");
 
                 // Bổ sung: Đảm bảo độ chênh lệch giữa True và False phải đủ lớn (ví dụ > 5%) để tránh nhiễu
                 bool hasSignificantDifference = Math.Abs(simTrue - simFalse) >= 0.05;
 
                 if ((isRegularMatch || isInverseMatch) && hasSignificantDifference)
                 {
-                    Logger.Success($"✓ Boundary Worked: {boundary.ContextName}");
-                    currentState.UpdateStatus(ScanStatus.HeuristicDone, $"Phát hiện mục tiêu nằm trong boudanry {boundary.ContextName}");
+                    config.OnProgress?.Invoke($"[SUCCESS] Boundary Worked: {boundary.ContextName}");
                     result.LockedBoundary = boundary;
                     result.ApplicableBoundaries.Clear();
                     result.ApplicableBoundaries.Add(boundary);
@@ -562,7 +525,7 @@ namespace SQLiScanner.Modules
                     return;
                 }
 
-                Logger.Warning($"Boundary {boundary} không có tác dụng.");
+                config.OnProgress?.Invoke($"Boundary {boundary} không có tác dụng.");
 
             }
 
@@ -620,12 +583,8 @@ namespace SQLiScanner.Modules
                     .ThenBy(p => p.Risk)
                     .ToList();
 
-                Logger.Info($"Loaded {result.ApplicablePayloads.Count} payloads từ XML");
             }
-            catch (Exception ex)
-            {
-                Logger.Warning($"Lỗi load payloads: {ex.Message}");
-            }
+            catch (Exception){}
         }
         private async Task<List<Boundary>> GetAllApplicableBoundaries()
         {
@@ -846,7 +805,6 @@ namespace SQLiScanner.Modules
                 if (similarity < 0.95 || isReflected)
                 {
                     discoveredActiveCookies.Add(word);
-                    Logger.Info($"[Active Miner] Phát hiện Hidden Cookie: [{word}] (Similarity: {similarity * 100:F1}%, Reflected: {isReflected})");
                 }
             }
             return discoveredActiveCookies;
@@ -891,7 +849,6 @@ namespace SQLiScanner.Modules
             // Nếu không có sự thay đổi thì bỏ qua phân định
             if (baselineVsMutation > 0.98)
             {
-                Logger.Info($"[Cookie Aliasing] Tham số [{paramName}] không làm thay đổi trạng thái giao diện. Bỏ qua phân định.");
                 return InjectionRoute.CreateStandard(paramName, originalValue);
             }
 
@@ -926,7 +883,6 @@ namespace SQLiScanner.Modules
                 // Điều đó chứng tỏ Server đã bỏ qua giá trị ở URL/Form và lấy trực tiếp giá trị từ Cookie!
                 if (conflictVsMutation > 0.95 && conflictVsBaseline < 0.90)
                 {
-                    Logger.Success($"[WAF Bypass] Server ưu tiên đọc Cookie [{cookieName}] thay vì tham số [{paramName}]!");
                     return new InjectionRoute(RouteType.Cookie, cookieName, originalValue);
                 }
             }

