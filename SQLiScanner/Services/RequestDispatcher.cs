@@ -58,11 +58,6 @@ namespace SQLiScanner.Services
                 if (method == HttpMethod.Post)
                 {
                     request.Content = new FormUrlEncodedContent(bodyParams);
-                    //Logger.Request(method.ToString(), $"URL Query: {uriBuilder.Query} | Body: {string.Join(", ", bodyParams.Select(kv => $"{kv.Key}=[{kv.Value}]"))}");
-                }
-                else
-                {
-                    //Logger.Request(method.ToString(), uriBuilder.ToString());
                 }
 
 

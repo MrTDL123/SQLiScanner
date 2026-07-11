@@ -62,93 +62,93 @@ namespace SQLiScanner
 
             List<CrawlResult> targetsDemo = new()
             {
-                new()
-                {
-                    BaseUrl = "http://testasp.vulnweb.com/Login.asp",
-                    HttpMethod = "GET",
-                    IsForm = false,
-                    Params = new()
-                    {
-                        { "RetURL", "/Default.asp?" }
-                    },
-                    RawQueryString = "RetURL=%2FDefault.asp%3F"
-                },
+                //new()
+                //{
+                //    BaseUrl = "http://testasp.vulnweb.com/Login.asp",
+                //    HttpMethod = "GET",
+                //    IsForm = false,
+                //    Params = new()
+                //    {
+                //        { "RetURL", "/Default.asp?" }
+                //    },
+                //    RawQueryString = "RetURL=%2FDefault.asp%3F"
+                //},
 
-                new()
-                {
-                    BaseUrl = "http://testasp.vulnweb.com/showforum.asp",
-                    HttpMethod = "GET",
-                    IsForm = false,
-                    OriginalCookie = "ASPSESSIONIDACDRSBTA=HMBDEPLCJFJGJJMNEMHIFKME",
-                    PageTolerance = 0.05,
-                    Params = new()
-                    {
-                        { "id", "0" }
-                    },
-                    RawQueryString = "id=0"
-                },
+                //new()
+                //{
+                //    BaseUrl = "http://testasp.vulnweb.com/showforum.asp",
+                //    HttpMethod = "GET",
+                //    IsForm = false,
+                //    OriginalCookie = "ASPSESSIONIDACDRSBTA=HMBDEPLCJFJGJJMNEMHIFKME",
+                //    PageTolerance = 0.05,
+                //    Params = new()
+                //    {
+                //        { "id", "0" }
+                //    },
+                //    RawQueryString = "id=0"
+                //},
 
-                new()
-                {
-                    BaseUrl = "http://testasp.vulnweb.com/Register.asp",
-                    HttpMethod = "GET",
-                    IsForm = false,
-                    Params = new()
-                    {
-                        { "RetURL", "/Default.asp?" }
-                    },
-                    RawQueryString = "RetURL=%2FDefault.asp%3F"
-                },
-                new()
-                {
-                    BaseUrl = "http://testasp.vulnweb.com/Login.asp",
-                    HttpMethod = "POST",
-                    IsForm = true,
-                    Params = new()
-                    {
-                        { "tfUName", "admin" },
-                        { "tfUPass", "Admin@123"}
-                    },
-                    RawQueryString = "RetURL=%2FDefault.asp%3F"
-                },
+                //new()
+                //{
+                //    BaseUrl = "http://testasp.vulnweb.com/Register.asp",
+                //    HttpMethod = "GET",
+                //    IsForm = false,
+                //    Params = new()
+                //    {
+                //        { "RetURL", "/Default.asp?" }
+                //    },
+                //    RawQueryString = "RetURL=%2FDefault.asp%3F"
+                //},
+                //new()
+                //{
+                //    BaseUrl = "http://testasp.vulnweb.com/Login.asp",
+                //    HttpMethod = "POST",
+                //    IsForm = true,
+                //    Params = new()
+                //    {
+                //        { "tfUName", "admin" },
+                //        { "tfUPass", "Admin@123"}
+                //    },
+                //    RawQueryString = "RetURL=%2FDefault.asp%3F"
+                //},
 
-                new()
-                {
-                    BaseUrl = "http://testasp.vulnweb.com/showforum.asp",
-                    HttpMethod = "GET",
-                    IsForm = false,
-                    Params = new()
-                    {
-                        { "id", "0" }
-                    },
-                    RawQueryString = "id=0"
-                },
+                //new()
+                //{
+                //    BaseUrl = "http://testasp.vulnweb.com/showforum.asp",
+                //    HttpMethod = "GET",
+                //    IsForm = false,
+                //    Params = new()
+                //    {
+                //        { "id", "0" }
+                //    },
+                //    RawQueryString = "id=0"
+                //},
 
-                new()
-                {
-                    BaseUrl = "https://gamdie.com/",
-                    HttpMethod = "GET",
-                    IsForm = true,
-                    OriginalCookie = "",
-                    Params = new()
-                    {
-                        { "s", "TEST" }
-                    },
-                    RawQueryString = "s=TEST"
-                },
+                //new()
+                //{
+                //    BaseUrl = "https://gamdie.com/",
+                //    HttpMethod = "GET",
+                //    IsForm = true,
+                //    OriginalCookie = "",
+                //    Params = new()
+                //    {
+                //        { "s", "TEST" }
+                //    },
+                //    RawQueryString = "s=TEST"
+                //},
 
-                new()
-                {
-                    BaseUrl = "https://www.ovagames.com/",
-                    HttpMethod = "GET",
-                    IsForm = true,
-                    OriginalCookie = "",
-                    Params = new()
-                    {
-                        { "s", "TEST" }
-                    },
-                    RawQueryString = "s=TEST"
-                },
+                //new()
+                //{
+                //    BaseUrl = "https://www.ovagames.com/",
+                //    HttpMethod = "GET",
+                //    IsForm = true,
+                //    OriginalCookie = "",
+                //    Params = new()
+                //    {
+                //        { "s", "TEST" }
+                //    },
+                //    RawQueryString = "s=TEST"
+                //},
 
                 new()
                 {
@@ -258,7 +258,7 @@ namespace SQLiScanner
                             exploitationResult = await _exploitationEngine.ExtractDataAsync(
                                 vulnTarget,
                                 vulnResult,
-                                "current_user",
+                                "version",
                                 onProgress,
                                 scanConfig.Token
                             );

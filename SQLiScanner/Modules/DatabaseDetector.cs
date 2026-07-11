@@ -325,10 +325,10 @@ namespace SQLiScanner.Modules
             ScanConfig config,
             string expectedResult = null)
         {
-            string rawFullPayload = $"{route.OriginalValue}{prefix} {payload} {suffix} ";
-            string fullPayload = route.Type == RouteType.Standard
-                ? TamperEngine.ApplyTamper(rawFullPayload)
-                : rawFullPayload;
+            string tamperedPayload = route.Type == RouteType.Standard
+                ? TamperEngine.ApplyTamper(payload)
+                : payload;
+            string fullPayload = $"{route.OriginalValue}{prefix} {tamperedPayload} {suffix} ";
             var (html, _, _, _, _) = await _requestService.RequestAsync(target, fullPayload, route, config.Token);
 
             if (string.IsNullOrEmpty(html))
@@ -392,16 +392,12 @@ namespace SQLiScanner.Modules
             ScanConfig config)
         {
             // CHUẨN BỊ PAYLOAD
-            string rawPayloadTrue = $"{route.OriginalValue}{prefix} {payload} {suffix} ";
-            string fullPayloadTrue = route.Type == RouteType.Standard
-                ? TamperEngine.ApplyTamper(rawPayloadTrue)
-                : rawPayloadTrue;
+            string tamperedPayloadTrue = route.Type == RouteType.Standard
+                ? TamperEngine.ApplyTamper(payload)
+                : payload;
+            string fullPayloadTrue = $"{route.OriginalValue}{prefix} {tamperedPayloadTrue} {suffix} ";
 
-            string falsePayload = payload.Replace("=", "!=").Replace(">", "<");
-            string rawPayloadFalse = $"{route.OriginalValue}{prefix} {falsePayload} {suffix} ";
-            string fullPayloadFalse = route.Type == RouteType.Standard
-                ? TamperEngine.ApplyTamper(rawPayloadFalse)
-                : rawPayloadFalse;
+            string fullPayloadFalse = fullPayloadTrue.Replace("=", "!=").Replace(">", "<");
 
             (string? htmlTrue, byte[]? bytesTrue, int statusTrue, string trueFinalUrl, _) =
                 await _requestService.RequestAsync(target, fullPayloadTrue, route, config.Token);
@@ -551,11 +547,11 @@ namespace SQLiScanner.Modules
             config.OnProgress?.Invoke($"\n[TIME-BASED] Sử dụng Payload: {payload}");
             string payloadStr = payload.Replace("[SLEEPTIME]", sleepSeconds.ToString());
 
-            string rawFullPayload = $"{route.OriginalValue}{prefix} {payloadStr} {suffix} ";
-            string fullPayload = route.Type == RouteType.Standard
-                ? TamperEngine.ApplyTamper(rawFullPayload)
-                : rawFullPayload;
+            string tamperedPayload = route.Type == RouteType.Standard
+                ? TamperEngine.ApplyTamper(payloadStr)
+                : payloadStr;
 
+            string fullPayload = $"{route.OriginalValue}{prefix} {tamperedPayload} {suffix} ";
             config.OnProgress?.Invoke($"[TIME-BASED] Kiểm tra thời gian phản hồi trung bình...");
 
             // Khởi tạo một Route Standard sạch cho các request đo Baseline đo đạc không mang payload
