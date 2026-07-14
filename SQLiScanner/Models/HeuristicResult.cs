@@ -28,6 +28,7 @@ namespace SQLiScanner.Models
 
         // Boundary hoạt động được thu nhặt từ Phase 3 ở ContextAnalyzer
         public Boundary? LockedBoundary { get; set; }
+        public string TargetDBMS { get; set; } = "UNKNOWN";
 
         // Tạo một thuộc tính để nhận prefix từ locked boundary cho tiện truy vấn
         public string WorkingPrefix => LockedBoundary?.Prefix ?? "";

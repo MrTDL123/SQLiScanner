@@ -50,7 +50,9 @@ namespace SQLiScanner
                         .Handle<TimeoutException>()
                         .HandleResult(response => response.StatusCode == HttpStatusCode.TooManyRequests    // 429
                                                || response.StatusCode == HttpStatusCode.ServiceUnavailable // 503
-                                               || response.StatusCode == HttpStatusCode.Forbidden),         // 403 từ WAF 
+                                               || response.StatusCode == HttpStatusCode.BadGateway         // 502: Nginx mất kết nối với Backend
+                                               || response.StatusCode == HttpStatusCode.GatewayTimeout),   // 504    
+                                                
                     MaxRetryAttempts = 3,
                     BackoffType = DelayBackoffType.Exponential,
                     UseJitter = true,
