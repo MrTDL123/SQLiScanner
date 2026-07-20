@@ -639,12 +639,12 @@ namespace SQLiScanner.Modules
                     result.ApplicableBoundaries.Add(boundary);
                     result.Status = "SUCCESS";
 
-                    // Load payloads
-                    await LoadApplicablePayloadsAsync(result);
-                    return;
                 }
 
                 config.OnProgress?.Invoke($"Boundary {boundary} không có tác dụng.");
+                // Load payloads
+                await LoadApplicablePayloadsAsync(result);
+                return;
 
             }
 
@@ -857,6 +857,12 @@ namespace SQLiScanner.Modules
             InjectionRoute route,
             ScanConfig config)
         {
+            if (baselineStatus == 403 || baselineStatus == 406)
+            {
+                config.OnProgress?.Invoke("[Concatenation] Phản hồi ban đầu bị chặn. Bỏ qua kĩ thuật nối chuỗi");
+                return "UNKNOWN";
+            }
+
             if (string.IsNullOrEmpty(originalValue) || originalValue.Length < 2)
             {
                 config.OnProgress?.Invoke("[Concatenation] OriginalValue quá ngắn. Bỏ qua kĩ thuật nối chuỗi");
@@ -875,15 +881,6 @@ namespace SQLiScanner.Modules
             {
                 if (config.Token.IsCancellationRequested) return "UNKNOWN";
 
-                // Kiểm tra MSSQL (sử dụng '+')
-                // VD: adm'+'in
-                string mssqlPayload = $"{str1}{separator}+{separator}{str2}";
-                if (await IsConcatenationMatchAsync(target, mssqlPayload, route, baselineStatus, baselineLength, baselineHtml, config.Token))
-                {
-                    config.OnProgress?.Invoke($"[Concatenation] [MATCH] Nhận diện dấu hiệu của [MSSQL] qua dấu nháy [{separator}].");
-                    return "MSSQL";
-                }
-
                 // Kiểm tra MySQL (Nối bằng khoảng trắng)
                 // VD: adm' 'in
                 string mysqlPayload = $"{str1}{separator} {separator}{str2}";
@@ -891,6 +888,15 @@ namespace SQLiScanner.Modules
                 {
                     config.OnProgress?.Invoke($"[Concatenation] [MATCH] Nhận diện dấu hiệu của [MySQL] qua dấu nháy [{separator}].");
                     return "MySQL";
+                }
+
+                // Kiểm tra MSSQL (sử dụng '+')
+                // VD: adm'+'in
+                string mssqlPayload = $"{str1}{separator}+{separator}{str2}";
+                if (await IsConcatenationMatchAsync(target, mssqlPayload, route, baselineStatus, baselineLength, baselineHtml, config.Token))
+                {
+                    config.OnProgress?.Invoke($"[Concatenation] [MATCH] Nhận diện dấu hiệu của [MSSQL] qua dấu nháy [{separator}].");
+                    return "MSSQL";
                 }
 
                 // Kiểm tra nhóm ANSI (Oracle, PostgreSQL, SQLite sử dụng toán tử '||')

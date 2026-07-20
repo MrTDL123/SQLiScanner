@@ -30,6 +30,7 @@ namespace SQLiScanner
             };
 
             var sharedCookieContainer = new CookieContainer();
+            // Nếu quét nhiều website cùng lúc có thể sẽ bị lẫn cookie lẫn nhau
             services.AddSingleton(sharedCookieContainer);
 
             Action<ResiliencePipelineBuilder<HttpResponseMessage>> configureResilience = builder =>
@@ -70,29 +71,45 @@ namespace SQLiScanner
                         UseCookies = false,
                         PooledConnectionLifetime = TimeSpan.FromMinutes(2),
                         PooledConnectionIdleTimeout = TimeSpan.FromSeconds(30),
-                        MaxConnectionsPerServer = 50,
+                        // TODO: Cần phải đổi nếu như sau này tích hợp thêm đa luồng
+                        MaxConnectionsPerServer = 200,
                         AutomaticDecompression = DecompressionMethods.All
                     })
+                    .SetHandlerLifetime(Timeout.InfiniteTimeSpan)
                     .AddResilienceHandler("SqliResilience", configureResilience);
 
             services.AddHttpClient<Crawler>(defaultWebClientConfig)
                     .ConfigurePrimaryHttpMessageHandler(() => new SocketsHttpHandler
                     {
                         UseCookies = true,
-                        CookieContainer = sharedCookieContainer,
-                        AllowAutoRedirect = true
+                        CookieContainer = sharedCookieContainer, 
+                        AllowAutoRedirect = true,
+                        PooledConnectionLifetime = TimeSpan.FromMinutes(2),
+                        PooledConnectionIdleTimeout = TimeSpan.FromSeconds(30),
+                        MaxConnectionsPerServer = 100,
+                        AutomaticDecompression = DecompressionMethods.All
                     })
+                    .SetHandlerLifetime(Timeout.InfiniteTimeSpan)
                     .AddResilienceHandler("SqliResilience", configureResilience);
-            services.AddTransient<ContextAnalyzer>();
-            services.AddTransient<DatabaseDetector>();
-            services.AddTransient<UnionDetector>();
-            services.AddTransient<ExploitationEngine>();
 
             services.AddHttpClient<IAiApiClient, AiApiClient>(client =>
-            {
-                client.BaseAddress = new Uri("https://localhost:7236/");
-                client.Timeout = TimeSpan.FromSeconds(60);
-            });
+                {
+                    client.BaseAddress = new Uri("https://localhost:7236/");
+                    client.Timeout = TimeSpan.FromSeconds(60);
+                })
+                .ConfigurePrimaryHttpMessageHandler(() => new SocketsHttpHandler
+                {
+                    PooledConnectionLifetime = TimeSpan.FromMinutes(5),
+                    PooledConnectionIdleTimeout = TimeSpan.FromSeconds(60),
+                    MaxConnectionsPerServer = 100
+                })
+                .SetHandlerLifetime(Timeout.InfiniteTimeSpan);
+
+
+            services.AddTransient<ContextAnalyzer>();
+            services.AddTransient<ExploitableAnalyzer>();
+            services.AddTransient<UnionDetector>();
+            services.AddTransient<ExploitationEngine>();
 
             services.AddSingleton<AiConcurrencyEngine>();
             services.AddTransient<ScannerApp>();
